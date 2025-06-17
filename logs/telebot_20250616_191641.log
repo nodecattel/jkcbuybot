@@ -1,0 +1,18 @@
+2025-06-16 19:16:41,477 - __main__ - INFO - Logging to file: logs/telebot_20250616_191641.log
+2025-06-16 19:16:41,477 - __main__ - INFO - Starting JunkCoin Alert Bot...
+2025-06-16 19:16:41,477 - __main__ - INFO - Configuration loaded: {"value_require": 80, "active_chat_ids": [-1002293167945, -1002419607771, 1145064309], "bot_owner": 1145064309, "by_pass": 6256846558, "image_path": "junk_resized.jpeg", "dynamic_threshold": {"enabled": true, "base_value": 300, "volume_multiplier": 0.05, "price_check_interval": 3600, "min_threshold": 80, "max_threshold": 9999999}, "sweep_orders": {"enabled": true, "min_value": 80, "check_interval": 2, "min_orders_filled": 2}, "trade_aggregation": {"enabled": true, "window_seconds": 3}, "coinex_access_id": "3B4C9568D1B24BB792C1E42D3487F6AD", "ascendex_access_id": ""}
+2025-06-16 19:16:41,478 - __main__ - INFO - Bot owner ID: 1145064309
+2025-06-16 19:16:41,478 - __main__ - INFO - Minimum value threshold: 80 USDT
+2025-06-16 19:16:41,478 - __main__ - INFO - Active in 3 chats
+2025-06-16 19:16:41,557 - __main__ - INFO - Starting bot with token: 80470...FLp8w
+2025-06-16 19:16:41,557 - __main__ - INFO - Bot owner ID: 1145064309
+2025-06-16 19:16:41,557 - __main__ - INFO - Bypass ID: 6256846558
+2025-06-16 19:16:41,562 - __main__ - ERROR - Critical error: name 'debug_command' is not defined
+Traceback (most recent call last):
+  File "/mnt/vagrant/app/telebot_fixed.py", line 1689, in <module>
+    main()
+  File "/mnt/vagrant/app/telebot_fixed.py", line 1579, in main
+    application.add_handler(CommandHandler("debug", debug_command))
+NameError: name 'debug_command' is not defined. Did you mean: 'help_command'?
+
+2025-06-16 19:16:41,562 - __main__ - INFO - Bot crashed. Sleeping for 60 seconds before exit to allow container restart...

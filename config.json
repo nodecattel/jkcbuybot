@@ -1,0 +1,35 @@
+{
+  "bot_token": "8047076193:AAFcECdbW4N0cbtfUtQuQNiPR5YPMzFLp8w",
+  "value_require": 80.0,
+  "active_chat_ids": [
+    -1002293167945,
+    -1002419607771,
+    1145064309,
+    6256846558
+  ],
+  "bot_owner": 1145064309,
+  "by_pass": 6256846558,
+  "image_path": "junk_resized.jpeg",
+  "dynamic_threshold": {
+    "enabled": true,
+    "base_value": 300,
+    "volume_multiplier": 0.05,
+    "price_check_interval": 3600,
+    "min_threshold": 100,
+    "max_threshold": 9999999
+  },
+  "sweep_orders": {
+    "enabled": true,
+    "min_value": 100,
+    "check_interval": 2,
+    "min_orders_filled": 2
+  },
+  "trade_aggregation": {
+    "enabled": true,
+    "window_seconds": 3
+  },
+  "coinex_access_id": "3B4C9568D1B24BB792C1E42D3487F6AD",
+  "coinex_secret_key": "544EC40F7BAE6CFE06FB6CADD4166A4845B79E89EC34E5B9",
+  "ascendex_access_id": "",
+  "ascendex_secret_key": ""
+}
