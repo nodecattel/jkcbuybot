@@ -1,0 +1,54 @@
+{
+  "_comment_bot_token": "Get your bot token from @BotFather on Telegram",
+  "bot_token": "YOUR_BOT_TOKEN_HERE",
+  
+  "_comment_value_require": "Minimum transaction value in USDT to trigger alerts",
+  "value_require": 300.0,
+  
+  "_comment_active_chat_ids": "List of chat IDs where the bot will send alerts. Use /debug command to get chat IDs",
+  "active_chat_ids": [
+    -1001234567890,
+    1234567890
+  ],
+  
+  "_comment_bot_owner": "Your Telegram user ID (get from @userinfobot or /debug command)",
+  "bot_owner": 1234567890,
+  
+  "_comment_by_pass": "Additional user ID that can use admin commands (optional, set to 0 if not needed)",
+  "by_pass": 0,
+  
+  "_comment_image_path": "Default image file for alerts (will be overridden by random image collection if available)",
+  "image_path": "junk_resized.jpeg",
+  
+  "_comment_dynamic_threshold": "Automatically adjust alert threshold based on trading volume",
+  "dynamic_threshold": {
+    "enabled": true,
+    "base_value": 300,
+    "volume_multiplier": 0.05,
+    "price_check_interval": 3600,
+    "min_threshold": 100,
+    "max_threshold": 1000
+  },
+  
+  "_comment_sweep_orders": "Detect and alert on large sweep orders that clear multiple price levels",
+  "sweep_orders": {
+    "enabled": true,
+    "min_value": 100,
+    "check_interval": 2,
+    "min_orders_filled": 2
+  },
+  
+  "_comment_trade_aggregation": "Group multiple small trades within a time window into single alerts",
+  "trade_aggregation": {
+    "enabled": true,
+    "window_seconds": 3
+  },
+  
+  "_comment_coinex_api": "CoinEx API credentials for private trading features (optional)",
+  "coinex_access_id": "",
+  "coinex_secret_key": "",
+  
+  "_comment_ascendex_api": "AscendEX API credentials for private trading features (optional)",
+  "ascendex_access_id": "",
+  "ascendex_secret_key": ""
+}

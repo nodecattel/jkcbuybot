@@ -11,6 +11,8 @@ import base64
 import hashlib
 import hmac
 import copy
+import random
+import glob
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.ext import Application, CommandHandler, CallbackContext, ConversationHandler, MessageHandler, filters, CallbackQueryHandler
 import requests
@@ -124,6 +126,10 @@ CONFIG_MENU = 3
 DYNAMIC_CONFIG = 4
 INPUT_API_KEYS = 5
 
+# Image collection constants
+IMAGES_DIR = "images"
+SUPPORTED_IMAGE_FORMATS = [".png", ".jpg", ".jpeg", ".gif"]
+
 # Transaction timestamps
 LAST_TRANS_KYC = int(time.time() * 1000)
 LAST_TRANS_COINEX = LAST_TRANS_KYC
@@ -174,13 +180,62 @@ async def is_admin(update: Update, context: CallbackContext) -> bool:
 
     return False
 
-# Load image
+def ensure_images_directory():
+    """Ensure the images directory exists."""
+    if not os.path.exists(IMAGES_DIR):
+        os.makedirs(IMAGES_DIR)
+        logger.info(f"Created images directory: {IMAGES_DIR}")
+
+def get_image_collection():
+    """Get list of all images in the collection."""
+    ensure_images_directory()
+    images = []
+    for ext in SUPPORTED_IMAGE_FORMATS:
+        pattern = os.path.join(IMAGES_DIR, f"*{ext}")
+        images.extend(glob.glob(pattern))
+        # Also check uppercase extensions
+        pattern = os.path.join(IMAGES_DIR, f"*{ext.upper()}")
+        images.extend(glob.glob(pattern))
+    return images
+
+def get_random_image():
+    """Get a random image from the collection."""
+    images = get_image_collection()
+
+    # If no images in collection, try to use the default image
+    if not images:
+        if os.path.exists(IMAGE_PATH):
+            return IMAGE_PATH
+        else:
+            logger.warning("No images found in collection and default image doesn't exist")
+            return None
+
+    # Return random image from collection
+    return random.choice(images)
+
+def load_random_image():
+    """Load a random image as InputFile for Telegram."""
+    image_path = get_random_image()
+    if not image_path:
+        return None
+
+    try:
+        with open(image_path, 'rb') as photo:
+            img = photo.read()
+            filename = os.path.basename(image_path)
+            return InputFile(io.BytesIO(img), filename=filename)
+    except Exception as e:
+        logger.error(f"Error loading image {image_path}: {e}")
+        return None
+
+# Load image (now using random selection)
 try:
-    with open(IMAGE_PATH, 'rb') as photo:
-        img = photo.read()
-        PHOTO = InputFile(io.BytesIO(img), filename=IMAGE_PATH)
+    PHOTO = load_random_image()
+    if PHOTO is None:
+        logger.warning("No images available for alerts")
 except Exception as e:
-    print(f"Error loading image: {e}")
+    logger.error(f"Error loading image: {e}")
+    PHOTO = None
 
 # Signal handler for graceful shutdown
 def signal_handler(sig, frame):
@@ -924,7 +979,12 @@ async def process_aggregated_trades():
 async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1):
     """Send an alert to all active chats."""
     global PHOTO
-    
+
+    # Get a random image for this alert
+    random_photo = load_random_image()
+    if random_photo is None:
+        random_photo = PHOTO  # Fallback to global PHOTO if no random image available
+
     # Format the message
     dt_object = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
     vietnam_tz = timezone(timedelta(hours=7))
@@ -986,10 +1046,10 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     bot = Bot(token=BOT_TOKEN)
     for chat_id in ACTIVE_CHAT_IDS:
         try:
-            if PHOTO:
+            if random_photo:
                 await bot.send_photo(
                     chat_id=chat_id,
-                    photo=PHOTO,
+                    photo=random_photo,
                     caption=message,
                     reply_markup=keyboard,
                     parse_mode="HTML"
@@ -1133,9 +1193,37 @@ async def set_image_input(update: Update, context: CallbackContext) -> int:
     global PHOTO, CONFIG
     photo = update.message.photo[-1]
     file = await photo.get_file()
-    PHOTO = InputFile(io.BytesIO(await file.download_as_bytearray()), filename=IMAGE_PATH)
+
+    # Download the image
+    image_data = await file.download_as_bytearray()
+
+    # Ensure images directory exists
+    ensure_images_directory()
+
+    # Generate unique filename with timestamp
+    timestamp = int(time.time())
+    file_extension = ".jpg"  # Default to jpg for Telegram photos
+    filename = f"alert_image_{timestamp}{file_extension}"
+    image_path = os.path.join(IMAGES_DIR, filename)
+
+    # Save to collection
+    with open(image_path, 'wb') as f:
+        f.write(image_data)
+
+    # Also update the default image path for backward compatibility
     await file.download_to_drive(IMAGE_PATH)
-    await update.message.reply_text("Image updated successfully!")
+
+    # Update the global PHOTO variable with a new random image
+    PHOTO = load_random_image()
+
+    # Get collection count
+    collection_count = len(get_image_collection())
+
+    await update.message.reply_text(
+        f"✅ Image added to collection successfully!\n"
+        f"📁 Collection now has {collection_count} images\n"
+        f"🎲 Images will be randomly selected for alerts"
+    )
     return ConversationHandler.END
 
 async def cancel(update: Update, context: CallbackContext) -> int:
@@ -1580,38 +1668,74 @@ async def set_api_keys_input(update: Update, context: CallbackContext) -> int:
 async def help_command(update: Update, context: CallbackContext) -> None:
     """Show help information and available commands."""
     help_text = (
-        "🤖 <b>JunkCoin Alert Bot Commands</b> 🤖\n\n"
-        "<b>Basic Commands:</b>\n"
-        "/start - Start receiving alerts in this chat\n"
-        "/stop - Stop receiving alerts in this chat\n"
-        "/price - Check current JKC price\n"
+        "🤖⛵️ <b>JunkCoin Alert Bot</b> ⛵️🤖\n\n"
+        "🚨 <b>Real-time monitoring of JKC transactions across multiple exchanges</b>\n"
+        "🎯 <b>Smart alerts with sweep detection and trade aggregation</b>\n"
+        "🎨 <b>Random image collection for varied alert visuals</b>\n\n"
+
+        "📊 <b>Information Commands:</b>\n"
+        "/price - Check current JKC price and market cap\n"
         "/chart - Generate and send a price chart\n"
+        "/debug - Show user ID, chat info, and admin status\n"
         "/help - Show this help message\n\n"
-        
-        "<b>Admin Commands:</b>\n"
-        "/config - Access bot configuration menu\n"
-        "/setmin - Set minimum transaction value\n"
-        "/setimage - Set image for alerts\n"
-        "/toggle_aggregation - Toggle trade aggregation\n"
-        "/setapikey - Set exchange API keys (owner only)\n"
-        "/setapikeys - Set exchange API keys (owner only)\n"
-        "/ipwan - Get server's public IP (owner only)\n\n"
-        
-        "<b>About:</b>\n"
-        "This bot monitors JKC transactions across exchanges and sends alerts for significant trades."
+
+        "🛑 <b>Control Commands:</b>\n"
+        "/start - Start receiving alerts in this chat\n"
+        "/stop - Stop receiving alerts in this chat\n\n"
+
+        "⚙️ <b>Admin Configuration:</b>\n"
+        "/config - Interactive configuration menu\n"
+        "/setmin [value] - Set minimum transaction value (e.g. /setmin 150)\n"
+        "/toggle_aggregation - Enable/disable trade aggregation\n\n"
+
+        "🎨 <b>Image Management (Admin):</b>\n"
+        "/setimage - Add image to collection (send image after command)\n"
+        "/list_images - View all images in your collection\n"
+        "/clear_images - Remove all images from collection\n\n"
+
+        "🔐 <b>Owner Only Commands:</b>\n"
+        "/setapikey - Configure exchange API keys\n"
+        "/ipwan - Get server's public IP address\n\n"
+
+        "🚨 <b>Alert Types:</b>\n"
+        "🚨 Standard (1x threshold) | 💥 Significant (2x)\n"
+        "🔥 Major (3x) | 🔥🔥 Huge (5x) | 🐋🐋🐋 Whale (10x+)\n\n"
+
+        "📈 <b>Monitored Exchanges:</b>\n"
+        "• NonKYC (Real-time orderbook + sweep detection)\n"
+        "• CoinEx (Live trade monitoring)\n"
+        "• AscendEX (With API keys)\n\n"
+
+        "💡 <b>Pro Tips:</b>\n"
+        "• Use /setimage multiple times to build a varied collection\n"
+        "• Enable trade aggregation to catch coordinated buying\n"
+        "• Set threshold based on your preferred alert frequency\n"
+        "• Use /debug to verify your admin permissions"
     )
     
     # Create buttons for quick access to common commands
+    user_id = update.effective_user.id
+    is_user_admin = await is_admin(update, context)
+
+    # Basic buttons for all users
     keyboard = [
         [
-            InlineKeyboardButton("📊 Price", callback_data="cmd_price"),
-            InlineKeyboardButton("📈 Chart", callback_data="cmd_chart")
+            InlineKeyboardButton("📊 Check Price", callback_data="cmd_price"),
+            InlineKeyboardButton("📈 View Chart", callback_data="cmd_chart")
         ],
         [
-            InlineKeyboardButton("⚙️ Config", callback_data="cmd_config"),
+            InlineKeyboardButton("🔍 Debug Info", callback_data="cmd_debug"),
             InlineKeyboardButton("🛑 Stop Bot", callback_data="cmd_stop")
         ]
     ]
+
+    # Add admin buttons if user is admin
+    if is_user_admin:
+        keyboard.insert(1, [
+            InlineKeyboardButton("⚙️ Configuration", callback_data="cmd_config"),
+            InlineKeyboardButton("🎨 List Images", callback_data="cmd_list_images")
+        ])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
@@ -1624,45 +1748,33 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
     """Handle button commands from the help menu."""
     query = update.callback_query
     await query.answer()
-    
+
+    # Create a new update object for command execution
+    new_update = Update(
+        update_id=update.update_id,
+        message=query.message,
+        callback_query=None
+    )
+
     if query.data == "cmd_price":
-        # Create a new update object with the message from the callback query
-        new_update = Update(
-            update_id=update.update_id,
-            message=query.message,
-            callback_query=None
-        )
         await check_price(new_update, context)
     elif query.data == "cmd_chart":
-        new_update = Update(
-            update_id=update.update_id,
-            message=query.message,
-            callback_query=None
-        )
         await chart_command(new_update, context)
+    elif query.data == "cmd_debug":
+        await debug_command(new_update, context)
     elif query.data == "cmd_config":
-        if update.effective_user.id in (BY_PASS, BOT_OWNER):
-            new_update = Update(
-                update_id=update.update_id,
-                message=query.message,
-                callback_query=None
-            )
+        if await is_admin(update, context):
             await config_command(new_update, context)
         else:
-            await query.edit_message_text("You don't have permission to access configuration.")
+            await query.edit_message_text("❌ You don't have permission to access configuration.")
+    elif query.data == "cmd_list_images":
+        if await is_admin(update, context):
+            await list_images_command(new_update, context)
+        else:
+            await query.edit_message_text("❌ You don't have permission to list images.")
     elif query.data == "cmd_stop":
-        new_update = Update(
-            update_id=update.update_id,
-            message=query.message,
-            callback_query=None
-        )
         await stop_bot(new_update, context)
     elif query.data == "cmd_help":
-        new_update = Update(
-            update_id=update.update_id,
-            message=query.message,
-            callback_query=None
-        )
         await help_command(new_update, context)
 
 async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
@@ -1689,6 +1801,63 @@ async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(f"Trade aggregation is now {state}.")
     else:
         logger.warning(f"User {user_id} tried to use toggle_aggregation command without admin permissions")
+        await update.message.reply_text("You do not have permission to use this command.")
+
+async def list_images_command(update: Update, context: CallbackContext) -> None:
+    """List all images in the collection - admin only command."""
+    user_id = update.effective_user.id
+    logger.info(f"list_images command called by user {user_id}")
+
+    if await is_admin(update, context):
+        images = get_image_collection()
+        if not images:
+            await update.message.reply_text(
+                "📁 Image collection is empty.\n"
+                "Use /setimage to add images to the collection."
+            )
+        else:
+            image_list = []
+            for i, img_path in enumerate(images, 1):
+                filename = os.path.basename(img_path)
+                size = os.path.getsize(img_path)
+                size_kb = size / 1024
+                image_list.append(f"{i}. {filename} ({size_kb:.1f} KB)")
+
+            message = (
+                f"📁 <b>Image Collection ({len(images)} images)</b>\n\n"
+                + "\n".join(image_list) +
+                "\n\n🎲 Images are randomly selected for alerts"
+            )
+            await update.message.reply_text(message, parse_mode="HTML")
+    else:
+        logger.warning(f"User {user_id} tried to use list_images command without admin permissions")
+        await update.message.reply_text("You do not have permission to use this command.")
+
+async def clear_images_command(update: Update, context: CallbackContext) -> None:
+    """Clear all images from the collection - admin only command."""
+    user_id = update.effective_user.id
+    logger.info(f"clear_images command called by user {user_id}")
+
+    if await is_admin(update, context):
+        images = get_image_collection()
+        if not images:
+            await update.message.reply_text("📁 Image collection is already empty.")
+        else:
+            # Delete all images in the collection
+            deleted_count = 0
+            for img_path in images:
+                try:
+                    os.remove(img_path)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error deleting image {img_path}: {e}")
+
+            await update.message.reply_text(
+                f"🗑️ Cleared {deleted_count} images from collection.\n"
+                f"Default image will be used for alerts."
+            )
+    else:
+        logger.warning(f"User {user_id} tried to use clear_images command without admin permissions")
         await update.message.reply_text("You do not have permission to use this command.")
 
 async def debug_command(update: Update, context: CallbackContext) -> None:
@@ -1749,6 +1918,8 @@ def main():
     application.add_handler(CommandHandler("ipwan", get_ipwan_command))
     application.add_handler(CommandHandler("toggle_aggregation", toggle_aggregation))
     application.add_handler(CommandHandler("debug", debug_command))  # This should now be defined
+    application.add_handler(CommandHandler("list_images", list_images_command))
+    application.add_handler(CommandHandler("clear_images", clear_images_command))
     
     # Add conversation handlers for admin commands
     application.add_handler(ConversationHandler(
