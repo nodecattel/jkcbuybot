@@ -144,7 +144,6 @@ LAST_THRESHOLD_UPDATE = time.time()
 running = True
 
 # Add these global variables at the top of the file with other globals
-TRADE_AGGREGATION_WINDOW = 5  # seconds (increased from 3)
 PENDING_TRADES = {}  # {exchange: {buyer_id: [trades]}}
 LAST_AGGREGATION_CHECK = time.time()
 
@@ -154,7 +153,19 @@ DEBUG_MODE = True
 # Add a function to check if a user is an admin
 async def is_admin(update: Update, context: CallbackContext) -> bool:
     """Check if the user is an admin or bot owner."""
-    user_id = update.effective_user.id
+    # Get user ID with multiple fallback methods to ensure we get the correct one
+    user_id = None
+    if update.effective_user:
+        user_id = update.effective_user.id
+    elif update.message and update.message.from_user:
+        user_id = update.message.from_user.id
+    elif update.callback_query and update.callback_query.from_user:
+        user_id = update.callback_query.from_user.id
+
+    if user_id is None:
+        logger.error("Could not extract user ID from update")
+        return False
+
     chat_id = update.effective_chat.id
 
     # Debug logging
@@ -843,17 +854,18 @@ async def ascendex_websocket():
 async def process_message(price, quantity, sum_value, exchange, timestamp, exchange_url):
     """Process a trade message and send notification if it meets criteria."""
     global PHOTO, PENDING_TRADES, LAST_AGGREGATION_CHECK
-    
+
     # Log all trades for debugging
     logger.info(f"Processing trade: {exchange} - {quantity} JKC at {price} USDT (Total: {sum_value} USDT)")
 
     # Update threshold based on volume
     await update_threshold()
 
-    # Check if aggregation is enabled
+    # Get aggregation settings from config
     aggregation_enabled = CONFIG.get("trade_aggregation", {}).get("enabled", True)
+    aggregation_window = CONFIG.get("trade_aggregation", {}).get("window_seconds", 8)
 
-    if not aggregation_enabled or TRADE_AGGREGATION_WINDOW <= 0:
+    if not aggregation_enabled or aggregation_window <= 0:
         # If aggregation is disabled, apply threshold check and send alert immediately if it passes
         if sum_value >= VALUE_REQUIRE:
             logger.info(f"Sending immediate alert for trade: {sum_value} USDT (threshold: {VALUE_REQUIRE})")
@@ -861,12 +873,11 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
         else:
             logger.info(f"Trade below threshold: {sum_value} USDT < {VALUE_REQUIRE} USDT")
         return
-    
-    # For aggregation, we'll use a simpler approach - just aggregate by exchange and time window
-    # This should catch sweep orders better
+
+    # For aggregation, we'll use a simpler approach - just aggregate by exchange within the time window
+    # Use a single aggregation key per exchange to catch all trades together
     current_time = int(time.time())
-    window_key = int(current_time / TRADE_AGGREGATION_WINDOW)
-    buyer_id = f"{exchange}_{window_key}"
+    buyer_id = f"{exchange}_current"  # Use a simple key per exchange
 
     # Initialize exchange dict if not exists
     if exchange not in PENDING_TRADES:
@@ -874,104 +885,124 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
 
     # Add trade to pending trades (regardless of individual threshold)
     if buyer_id not in PENDING_TRADES[exchange]:
-        PENDING_TRADES[exchange][buyer_id] = []
+        PENDING_TRADES[exchange][buyer_id] = {
+            'trades': [],
+            'window_start': current_time
+        }
 
-    PENDING_TRADES[exchange][buyer_id].append({
+    PENDING_TRADES[exchange][buyer_id]['trades'].append({
         'price': price,
         'quantity': quantity,
         'sum_value': sum_value,
         'timestamp': timestamp,
         'exchange': exchange,
-        'exchange_url': exchange_url
+        'exchange_url': exchange_url,
+        'received_time': current_time
     })
 
     # Log the pending trades for this buyer
-    total_pending = sum(t['sum_value'] for t in PENDING_TRADES[exchange][buyer_id])
-    logger.info(f"Added to pending trades: {buyer_id} - Total now: {total_pending:.2f} USDT (threshold: {VALUE_REQUIRE} USDT)")
-    
-    # If the total already exceeds the threshold, process it immediately
-    if total_pending >= VALUE_REQUIRE:
-        logger.info(f"Pending trades exceed threshold, processing immediately: {total_pending} USDT")
-        trades = PENDING_TRADES[exchange][buyer_id]
-        
-        # Calculate aggregated values
-        total_quantity = sum(trade['quantity'] for trade in trades)
-        avg_price = total_pending / total_quantity if total_quantity > 0 else 0
-        latest_timestamp = max(trade['timestamp'] for trade in trades)
-        
-        # Send the alert
-        await send_alert(
-            avg_price, 
-            total_quantity, 
-            total_pending, 
-            exchange, 
-            latest_timestamp, 
-            trades[0]['exchange_url'],
-            len(trades)
-        )
-        
-        # Clear these trades
+    total_pending = sum(t['sum_value'] for t in PENDING_TRADES[exchange][buyer_id]['trades'])
+    trade_count = len(PENDING_TRADES[exchange][buyer_id]['trades'])
+    logger.info(f"Added to pending trades: {buyer_id} - {trade_count} trades, Total: {total_pending:.2f} USDT (threshold: {VALUE_REQUIRE} USDT)")
+
+    # Check if we should process this aggregation immediately
+    window_start = PENDING_TRADES[exchange][buyer_id]['window_start']
+    time_in_window = current_time - window_start
+
+    # Process if either threshold is met OR window time has elapsed
+    should_process = (total_pending >= VALUE_REQUIRE) or (time_in_window >= aggregation_window)
+
+    if should_process:
+        trades = PENDING_TRADES[exchange][buyer_id]['trades']
+
+        if total_pending >= VALUE_REQUIRE:
+            logger.info(f"Aggregated trades exceed threshold: {total_pending:.2f} USDT >= {VALUE_REQUIRE} USDT")
+
+            # Calculate aggregated values
+            total_quantity = sum(trade['quantity'] for trade in trades)
+            avg_price = total_pending / total_quantity if total_quantity > 0 else 0
+            latest_timestamp = max(trade['timestamp'] for trade in trades)
+
+            # Send the alert
+            await send_alert(
+                avg_price,
+                total_quantity,
+                total_pending,
+                f"{exchange} (Aggregated)",
+                latest_timestamp,
+                trades[0]['exchange_url'],
+                len(trades)
+            )
+        else:
+            logger.info(f"Aggregation window expired: {time_in_window}s >= {aggregation_window}s, total: {total_pending:.2f} USDT < {VALUE_REQUIRE} USDT")
+
+        # Clear the processed trades
         del PENDING_TRADES[exchange][buyer_id]
-        
+
         # If the exchange dict is now empty, remove it
         if not PENDING_TRADES[exchange]:
             del PENDING_TRADES[exchange]
+
+        return  # Don't process individual window below
     
     # Check if it's time to process other aggregated trades
-    if current_time - LAST_AGGREGATION_CHECK >= 1:  # Check every second
+    if current_time - LAST_AGGREGATION_CHECK >= 2:  # Check every 2 seconds (less frequent)
         LAST_AGGREGATION_CHECK = current_time
         await process_aggregated_trades()
 
 async def process_aggregated_trades():
     """Process any pending aggregated trades that are ready."""
     global PENDING_TRADES
-    
+
+    # Get aggregation window from config
+    aggregation_window = CONFIG.get("trade_aggregation", {}).get("window_seconds", 8)
     current_time = int(time.time())
-    current_window = int(current_time / TRADE_AGGREGATION_WINDOW)
-    
+
     # Make a copy of the exchanges to avoid modification during iteration
     exchanges = list(PENDING_TRADES.keys())
-    
+
     for exchange in exchanges:
         # Make a copy of the buyer_ids to avoid modification during iteration
         buyer_ids = list(PENDING_TRADES[exchange].keys())
-        
+
         for buyer_id in buyer_ids:
-            # Check if this window has expired
-            window_key = int(buyer_id.split('_')[1])
-            
-            if window_key < current_window:
+            # Check if this aggregation window has expired
+            aggregation_data = PENDING_TRADES[exchange][buyer_id]
+            window_start = aggregation_data['window_start']
+            time_in_window = current_time - window_start
+
+            if time_in_window >= aggregation_window:
                 # This window has expired, process the trades
-                trades = PENDING_TRADES[exchange][buyer_id]
-                
+                trades = aggregation_data['trades']
+
                 # Calculate total value
                 total_value = sum(trade['sum_value'] for trade in trades)
-                
+
                 # If the total exceeds the threshold, send an alert
                 if total_value >= VALUE_REQUIRE:
                     # Calculate aggregated values
                     total_quantity = sum(trade['quantity'] for trade in trades)
                     avg_price = total_value / total_quantity if total_quantity > 0 else 0
                     latest_timestamp = max(trade['timestamp'] for trade in trades)
-                    
-                    logger.info(f"Processing aggregated trades: {len(trades)} trades, {total_quantity} JKC, {total_value} USDT")
-                    
+
+                    logger.info(f"Processing expired aggregated trades: {len(trades)} trades, {total_quantity} JKC, {total_value} USDT")
+
                     # Send the alert
                     await send_alert(
-                        avg_price, 
-                        total_quantity, 
-                        total_value, 
-                        f"{exchange} (Aggregated)", 
-                        latest_timestamp, 
+                        avg_price,
+                        total_quantity,
+                        total_value,
+                        f"{exchange} (Aggregated)",
+                        latest_timestamp,
                         trades[0]['exchange_url'],
                         len(trades)
                     )
                 else:
-                    logger.info(f"Aggregated trades below threshold: {total_value} USDT < {VALUE_REQUIRE} USDT")
-                
+                    logger.info(f"Expired aggregated trades below threshold: {total_value} USDT < {VALUE_REQUIRE} USDT")
+
                 # Remove these trades
                 del PENDING_TRADES[exchange][buyer_id]
-                
+
                 # If the exchange dict is now empty, remove it
                 if not PENDING_TRADES[exchange]:
                     del PENDING_TRADES[exchange]
@@ -1787,7 +1818,7 @@ async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
         logger.info(f"User {user_id} has admin permissions, toggling aggregation")
         # Initialize trade_aggregation if it doesn't exist
         if "trade_aggregation" not in CONFIG:
-            CONFIG["trade_aggregation"] = {"enabled": True, "window": TRADE_AGGREGATION_WINDOW}
+            CONFIG["trade_aggregation"] = {"enabled": True, "window_seconds": 8}
 
         # Toggle the enabled state
         CONFIG["trade_aggregation"]["enabled"] = not CONFIG["trade_aggregation"]["enabled"]
@@ -1805,7 +1836,15 @@ async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
 
 async def list_images_command(update: Update, context: CallbackContext) -> None:
     """List all images in the collection - admin only command."""
-    user_id = update.effective_user.id
+    # Get user ID with multiple fallback methods to ensure we get the correct one
+    user_id = None
+    if update.effective_user:
+        user_id = update.effective_user.id
+    elif update.message and update.message.from_user:
+        user_id = update.message.from_user.id
+    elif update.callback_query and update.callback_query.from_user:
+        user_id = update.callback_query.from_user.id
+
     logger.info(f"list_images command called by user {user_id}")
 
     if await is_admin(update, context):
@@ -1862,7 +1901,15 @@ async def clear_images_command(update: Update, context: CallbackContext) -> None
 
 async def debug_command(update: Update, context: CallbackContext) -> None:
     """Debug command to show user and chat IDs."""
-    user_id = update.effective_user.id
+    # Get user ID with multiple fallback methods to ensure we get the correct one
+    user_id = None
+    if update.effective_user:
+        user_id = update.effective_user.id
+    elif update.message and update.message.from_user:
+        user_id = update.message.from_user.id
+    elif update.callback_query and update.callback_query.from_user:
+        user_id = update.callback_query.from_user.id
+
     chat_id = update.effective_chat.id
 
     # Get chat type
@@ -1874,6 +1921,15 @@ async def debug_command(update: Update, context: CallbackContext) -> None:
     # Get bot info
     bot_info = await context.bot.get_me()
 
+    # Additional debug info to help troubleshoot
+    debug_sources = []
+    if update.effective_user:
+        debug_sources.append(f"effective_user: {update.effective_user.id}")
+    if update.message and update.message.from_user:
+        debug_sources.append(f"message.from_user: {update.message.from_user.id}")
+    if update.callback_query and update.callback_query.from_user:
+        debug_sources.append(f"callback_query.from_user: {update.callback_query.from_user.id}")
+
     debug_info = (
         "🔍 <b>Debug Information</b>\n\n"
         f"👤 <b>Your User ID:</b> {user_id}\n"
@@ -1884,7 +1940,9 @@ async def debug_command(update: Update, context: CallbackContext) -> None:
         f"🤖 <b>Bot Username:</b> @{bot_info.username}\n\n"
         f"⚙️ <b>Config Values:</b>\n"
         f"- Bot Owner ID: {BOT_OWNER}\n"
-        f"- Bypass ID: {BY_PASS}\n"
+        f"- Bypass ID: {BY_PASS}\n\n"
+        f"🔧 <b>Debug Sources:</b>\n"
+        f"{chr(10).join(debug_sources)}\n"
     )
 
     await update.message.reply_text(debug_info, parse_mode="HTML")
