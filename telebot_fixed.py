@@ -155,12 +155,14 @@ async def is_admin(update: Update, context: CallbackContext) -> bool:
     """Check if the user is an admin or bot owner."""
     # Get user ID with multiple fallback methods to ensure we get the correct one
     user_id = None
-    if update.effective_user:
-        user_id = update.effective_user.id
-    elif update.message and update.message.from_user:
+
+    # Try different methods to get the user ID, prioritizing message.from_user
+    if update.message and update.message.from_user:
         user_id = update.message.from_user.id
     elif update.callback_query and update.callback_query.from_user:
         user_id = update.callback_query.from_user.id
+    elif update.effective_user:
+        user_id = update.effective_user.id
 
     if user_id is None:
         logger.error("Could not extract user ID from update")
@@ -168,11 +170,19 @@ async def is_admin(update: Update, context: CallbackContext) -> bool:
 
     chat_id = update.effective_chat.id
 
-    # Debug logging
+    # Debug logging with more detail
     logger.info(f"Admin check - User ID: {user_id}, Chat ID: {chat_id}, BOT_OWNER: {BOT_OWNER}, BY_PASS: {BY_PASS}")
 
-    # Bot owner always has admin rights
-    if user_id == BOT_OWNER or user_id == BY_PASS:
+    # Additional debug info
+    if update.message and update.message.from_user:
+        logger.info(f"Message from_user ID: {update.message.from_user.id}")
+    if update.effective_user:
+        logger.info(f"Effective user ID: {update.effective_user.id}")
+    if update.callback_query and update.callback_query.from_user:
+        logger.info(f"Callback query from_user ID: {update.callback_query.from_user.id}")
+
+    # Bot owner always has admin rights - ensure both are integers for comparison
+    if int(user_id) == int(BOT_OWNER) or int(user_id) == int(BY_PASS):
         logger.info(f"User {user_id} is bot owner or bypass user")
         return True
 
@@ -292,7 +302,7 @@ async def get_nonkyc_ticker():
 async def get_nonkyc_trades():
     """Get historical trades from NonKYC WebSocket API."""
     uri = "wss://ws.nonkyc.io"
-    
+
     try:
         async with websockets.connect(uri, ping_interval=30) as websocket:
             # Request trades data
@@ -306,18 +316,178 @@ async def get_nonkyc_trades():
                 "id": 888
             }
             await websocket.send(json.dumps(trades_msg))
-            
+
             # Wait for response
             response = json.loads(await websocket.recv())
-            
+
             if "result" in response and "data" in response["result"]:
                 return response["result"]["data"]
             else:
                 return []
-                
+
     except Exception as e:
         print(f"Error getting NonKYC trades: {e}")
         return []
+
+async def get_coinex_trades():
+    """Get historical trades from CoinEx API v2."""
+    try:
+        import requests
+        # CoinEx v2 API for historical trades
+        url = "https://api.coinex.com/v2/spot/deals"
+        params = {
+            "market": "JKCUSDT",
+            "limit": 1000  # Get last 1000 trades
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("code") == 0 and "data" in data:
+                # Convert CoinEx v2 format to our standard format
+                trades = []
+                for trade in data["data"]:
+                    trades.append({
+                        "id": trade.get("id", ""),
+                        "price": trade.get("price", "0"),
+                        "quantity": trade.get("amount", "0"),  # CoinEx uses 'amount' for quantity
+                        "timestamp": trade.get("created_at", 0),  # CoinEx uses 'created_at' timestamp
+                        "side": trade.get("type", "unknown")  # buy/sell
+                    })
+                return trades
+        return []
+    except Exception as e:
+        logger.warning(f"Error getting CoinEx trades: {e}")
+        return []
+
+async def get_coinex_ticker():
+    """Get ticker data from CoinEx API v2."""
+    try:
+        import requests
+        # CoinEx v2 API for ticker data
+        url = "https://api.coinex.com/v2/spot/ticker"
+        params = {
+            "market": "JKCUSDT"
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("code") == 0 and "data" in data and len(data["data"]) > 0:
+                return data["data"][0]  # Return first (and only) market data
+        return None
+    except Exception as e:
+        logger.warning(f"Error getting CoinEx ticker: {e}")
+        return None
+
+async def calculate_volume_periods(trades_data):
+    """Calculate volume for different time periods from trades data."""
+    if not trades_data:
+        return {
+            "15m": 0,
+            "1h": 0,
+            "4h": 0,
+            "24h": 0
+        }
+
+    current_time = time.time() * 1000  # Convert to milliseconds
+
+    # Time periods in milliseconds
+    periods = {
+        "15m": 15 * 60 * 1000,      # 15 minutes
+        "1h": 60 * 60 * 1000,       # 1 hour
+        "4h": 4 * 60 * 60 * 1000,   # 4 hours
+        "24h": 24 * 60 * 60 * 1000  # 24 hours
+    }
+
+    volumes = {}
+
+    for period_name, period_ms in periods.items():
+        cutoff_time = current_time - period_ms
+        period_volume = 0
+
+        for trade in trades_data:
+            # Handle different timestamp formats
+            trade_time_ms = 0
+            timestamp = trade.get("timestamp", 0)
+
+            if isinstance(timestamp, str):
+                # Handle ISO format like '2025-06-21T11:03:23.862Z'
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    trade_time_ms = int(dt.timestamp() * 1000)
+                except (ValueError, AttributeError):
+                    # If ISO parsing fails, try to extract timestampms
+                    trade_time_ms = int(trade.get("timestampms", 0))
+            elif isinstance(timestamp, (int, float)):
+                # Handle numeric timestamp (assume milliseconds if > 1e10, else seconds)
+                if timestamp > 1e10:
+                    trade_time_ms = int(timestamp)
+                else:
+                    trade_time_ms = int(timestamp * 1000)
+            else:
+                # Fallback to timestampms field or time field
+                timestampms = trade.get("timestampms", 0)
+                time_field = trade.get("time", 0)
+                created_at = trade.get("created_at", 0)
+
+                if timestampms > 0:
+                    trade_time_ms = int(timestampms)
+                elif time_field > 0:
+                    # CoinEx v1 format (seconds)
+                    trade_time_ms = int(time_field * 1000)
+                elif created_at > 0:
+                    # CoinEx v2 format (milliseconds)
+                    trade_time_ms = int(created_at)
+                else:
+                    trade_time_ms = 0
+
+            if trade_time_ms >= cutoff_time:
+                # Calculate volume in USDT (price * quantity)
+                price = float(trade.get("price", 0))
+                # Handle different quantity field names
+                quantity = float(trade.get("quantity", trade.get("amount", 0)))
+                period_volume += price * quantity
+
+        volumes[period_name] = round(period_volume, 2)
+
+    return volumes
+
+async def calculate_combined_volume_periods():
+    """Calculate combined volume from both NonKYC and CoinEx exchanges."""
+    try:
+        # Get trades from both exchanges
+        nonkyc_trades = await get_nonkyc_trades()
+        coinex_trades = await get_coinex_trades()
+
+        # Calculate volumes for each exchange
+        nonkyc_volumes = await calculate_volume_periods(nonkyc_trades)
+        coinex_volumes = await calculate_volume_periods(coinex_trades)
+
+        # Combine volumes
+        combined_volumes = {}
+        for period in ["15m", "1h", "4h", "24h"]:
+            combined_volumes[period] = round(
+                nonkyc_volumes.get(period, 0) + coinex_volumes.get(period, 0), 2
+            )
+
+        # Also return individual exchange volumes for detailed display
+        return {
+            "combined": combined_volumes,
+            "nonkyc": nonkyc_volumes,
+            "coinex": coinex_volumes
+        }
+    except Exception as e:
+        logger.warning(f"Error calculating combined volumes: {e}")
+        # Fallback to NonKYC only
+        nonkyc_trades = await get_nonkyc_trades()
+        nonkyc_volumes = await calculate_volume_periods(nonkyc_trades)
+        return {
+            "combined": nonkyc_volumes,
+            "nonkyc": nonkyc_volumes,
+            "coinex": {"15m": 0, "1h": 0, "4h": 0, "24h": 0}
+        }
 
 async def get_nonkyc_orderbook():
     """Get orderbook data from NonKYC WebSocket API using subscription."""
@@ -1016,26 +1186,40 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     if random_photo is None:
         random_photo = PHOTO  # Fallback to global PHOTO if no random image available
 
+    # Get market data for additional context
+    try:
+        market_data = await get_nonkyc_ticker()
+        volume_data = await calculate_combined_volume_periods()
+        volume_periods = volume_data["combined"]
+
+        market_cap = market_data.get("marketcapNumber", 0) if market_data else 0
+        current_price = market_data.get("lastPriceNumber", price) if market_data else price
+    except Exception as e:
+        logger.warning(f"Could not fetch market data for alert: {e}")
+        market_cap = 0
+        current_price = price
+        volume_periods = {"15m": 0, "1h": 0, "4h": 0, "24h": 0}
+
     # Format the message
     dt_object = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
     vietnam_tz = timezone(timedelta(hours=7))
     dt_vietnam = dt_object.astimezone(vietnam_tz)
     formatted_time = dt_vietnam.strftime("%H:%M:%S %d/%m/%Y")
-    
+
     # Calculate magnitude ratio for scaling
     magnitude_ratio = sum_value / VALUE_REQUIRE
-    
+
     # Calculate magnitude indicator (number of green square emojis)
     magnitude_count = min(100, max(1, int(magnitude_ratio * 10)))
-    
+
     # Create rows of emojis (10 per row for readability)
     magnitude_rows = []
     for i in range(0, magnitude_count, 10):
         row_count = min(10, magnitude_count - i)
         magnitude_rows.append("🟩" * row_count)
-    
+
     magnitude_indicator = "\n".join(magnitude_rows)
-    
+
     # Dynamic alert text based on transaction size
     if magnitude_ratio >= 10:
         alert_text = "🐋🐋🐋 <b>MASSIVE WHALE TRANSACTION DETECTED!!!</b> 🐋🐋🐋"
@@ -1047,13 +1231,13 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         alert_text = "💥 <b>SIGNIFICANT Transaction Alert!</b> 💥"
     else:
         alert_text = "🚨 <b>Buy Transaction Detected</b> 🚨"
-    
+
     # Add special emoji for sweep orders
     if "Sweep" in exchange and "Sweep Buy" in exchange:
         alert_text = alert_text.replace("TRANSACTION", "SWEEP BUY")
         alert_text = alert_text.replace("Transaction", "Sweep Buy")
         alert_text = alert_text.replace("Buy", "Sweep Buy")
-    
+
     message = (
         f"{magnitude_indicator}\n\n"
         f"{alert_text}\n\n"
@@ -1062,12 +1246,24 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         f"💲 <b>Total Value:</b> {sum_value:.2f} USDT\n"
         f"🏦 <b>Exchange:</b> {exchange}\n"
     )
-    
+
     # Add number of trades if it's an aggregated alert
     if num_trades > 1:
         message += f"🔄 <b>Trades:</b> {num_trades}\n"
-    
+
     message += f"⏰ <b>Time:</b> {formatted_time}\n"
+
+    # Add market data if available
+    if market_cap > 0:
+        message += f"\n🏦 <b>Market Cap:</b> ${market_cap:,}\n"
+
+    # Add volume data
+    if any(v > 0 for v in volume_periods.values()):
+        message += (
+            f"📈 <b>Combined Volume:</b>\n"
+            f"🕐 15m: ${volume_periods['15m']:,.0f} | 1h: ${volume_periods['1h']:,.0f}\n"
+            f"🕐 4h: ${volume_periods['4h']:,.0f} | 24h: ${volume_periods['24h']:,.0f}\n"
+        )
     
     # Create inline button to exchange
     button = InlineKeyboardButton(text=f"Trade on {exchange.split(' ')[0]}", url=exchange_url)
@@ -1222,39 +1418,63 @@ async def set_image_command(update: Update, context: CallbackContext) -> int:
 
 async def set_image_input(update: Update, context: CallbackContext) -> int:
     global PHOTO, CONFIG
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
 
-    # Download the image
-    image_data = await file.download_as_bytearray()
+    try:
+        # Get the highest resolution photo
+        photo = update.message.photo[-1]
+        file = await photo.get_file()
 
-    # Ensure images directory exists
-    ensure_images_directory()
+        logger.info(f"Processing image upload: file_id={file.file_id}, file_size={file.file_size}")
 
-    # Generate unique filename with timestamp
-    timestamp = int(time.time())
-    file_extension = ".jpg"  # Default to jpg for Telegram photos
-    filename = f"alert_image_{timestamp}{file_extension}"
-    image_path = os.path.join(IMAGES_DIR, filename)
+        # Download the image
+        image_data = await file.download_as_bytearray()
+        logger.info(f"Downloaded image data: {len(image_data)} bytes")
 
-    # Save to collection
-    with open(image_path, 'wb') as f:
-        f.write(image_data)
+        # Ensure images directory exists
+        ensure_images_directory()
 
-    # Also update the default image path for backward compatibility
-    await file.download_to_drive(IMAGE_PATH)
+        # Generate unique filename with timestamp
+        timestamp = int(time.time())
+        file_extension = ".jpg"  # Default to jpg for Telegram photos
+        filename = f"alert_image_{timestamp}{file_extension}"
+        image_path = os.path.join(IMAGES_DIR, filename)
 
-    # Update the global PHOTO variable with a new random image
-    PHOTO = load_random_image()
+        # Save to collection
+        try:
+            with open(image_path, 'wb') as f:
+                f.write(image_data)
+            logger.info(f"Successfully saved image to: {image_path}")
+        except Exception as e:
+            logger.error(f"Error saving image to collection: {e}")
+            await update.message.reply_text(f"❌ Error saving image to collection: {e}")
+            return ConversationHandler.END
 
-    # Get collection count
-    collection_count = len(get_image_collection())
+        # Also update the default image path for backward compatibility
+        try:
+            await file.download_to_drive(IMAGE_PATH)
+            logger.info(f"Successfully saved default image to: {IMAGE_PATH}")
+        except Exception as e:
+            logger.warning(f"Error saving default image: {e}")
+            # Don't fail the whole operation if this fails
 
-    await update.message.reply_text(
-        f"✅ Image added to collection successfully!\n"
-        f"📁 Collection now has {collection_count} images\n"
-        f"🎲 Images will be randomly selected for alerts"
-    )
+        # Update the global PHOTO variable with a new random image
+        PHOTO = load_random_image()
+
+        # Get collection count
+        collection_count = len(get_image_collection())
+
+        await update.message.reply_text(
+            f"✅ Image added to collection successfully!\n"
+            f"📁 Collection now has {collection_count} images\n"
+            f"🎲 Images will be randomly selected for alerts\n"
+            f"📄 Saved as: {filename}"
+        )
+        logger.info(f"Image upload completed successfully. Collection now has {collection_count} images")
+
+    except Exception as e:
+        logger.error(f"Error in set_image_input: {e}")
+        await update.message.reply_text(f"❌ Error processing image: {e}")
+
     return ConversationHandler.END
 
 async def cancel(update: Update, context: CallbackContext) -> int:
@@ -1396,27 +1616,99 @@ async def check_price(update: Update, context: CallbackContext) -> None:
     if not market_data:
         await update.message.reply_text("Error fetching market data. Please try again later.")
         return
-        
-    current_price = market_data.get("lastPrice", "0")
-    
-    # Get market cap
-    response = requests.get(
-        "https://api-junkpool.blockraid.io/list/summary/mainnet")
-    marketcap = int(float(current_price) *
-                    float(response.json()['data']['supply']))
 
+    # Get combined volume data from both exchanges
+    volume_data = await calculate_combined_volume_periods()
+    volume_periods = volume_data["combined"]
+
+    # Extract data from NonKYC API
+    current_price = market_data.get("lastPriceNumber", 0)
+    yesterday_price = market_data.get("yesterdayPriceNumber", 0)
+    high_24h = market_data.get("highPriceNumber", 0)
+    low_24h = market_data.get("lowPriceNumber", 0)
+    volume_24h_jkc = market_data.get("volumeNumber", 0)
+    volume_24h_usdt = market_data.get("volumeUsdNumber", 0)
+    change_percent = market_data.get("changePercentNumber", 0)
+    market_cap_nonkyc = market_data.get("marketcapNumber", 0)
+    best_bid = market_data.get("bestBidNumber", 0)
+    best_ask = market_data.get("bestAskNumber", 0)
+    spread_percent = market_data.get("spreadPercentNumber", 0)
+
+    # Calculate additional metrics
+    price_change_usdt = current_price - yesterday_price if yesterday_price > 0 else 0
+
+    # Determine momentum emoji
+    if change_percent > 5:
+        momentum_emoji = "🚀🚀🚀"
+        momentum_text = "BULLISH"
+    elif change_percent > 2:
+        momentum_emoji = "🚀🚀"
+        momentum_text = "Strong Up"
+    elif change_percent > 0:
+        momentum_emoji = "🚀"
+        momentum_text = "Up"
+    elif change_percent == 0:
+        momentum_emoji = "➡️"
+        momentum_text = "Neutral"
+    elif change_percent > -2:
+        momentum_emoji = "📉"
+        momentum_text = "Down"
+    elif change_percent > -5:
+        momentum_emoji = "📉📉"
+        momentum_text = "Strong Down"
+    else:
+        momentum_emoji = "📉📉📉"
+        momentum_text = "BEARISH"
+
+    # Format change with appropriate emoji
+    change_emoji = "📈" if change_percent >= 0 else "📉"
+    change_sign = "+" if change_percent >= 0 else ""
+
+    # Create buttons
     button1 = InlineKeyboardButton(
-        text="CoinMarketCap", url="https://coinmarketcap.com/currencies/junkcoin")
+        text="📊 NonKYC", url="https://nonkyc.io/market/JKC_USDT")
     button2 = InlineKeyboardButton(
-        text="CoinGecko", url="https://www.coingecko.com/en/coins/junkcoin")
+        text="🏦 CoinEx", url="https://www.coinex.com/en/exchange/jkc-usdt")
+    button3 = InlineKeyboardButton(
+        text="🦎 CoinGecko", url="https://www.coingecko.com/en/coins/junkcoin")
+    button4 = InlineKeyboardButton(
+        text="📈 CoinMarketCap", url="https://coinmarketcap.com/currencies/junkcoin")
     keyboard = InlineKeyboardMarkup([
-        [button1, button2]
+        [button1, button2],
+        [button3, button4]
     ])
 
+    # Format the message with rich data including volume periods
+    message = (
+        f"⛵️ <b>JunkCoin (JKC) Market Data</b> ⛵️\n\n"
+        f"� <b>Price:</b> ${current_price:.6f} USDT\n"
+        f"{change_emoji} <b>24h Change:</b> {change_sign}{change_percent:.2f}% "
+        f"({change_sign}${price_change_usdt:.6f})\n"
+        f"{momentum_emoji} <b>Momentum:</b> {momentum_text}\n\n"
+
+        f"🏦 <b>Market Cap:</b> ${market_cap_nonkyc:,}\n\n"
+
+        f"📊 <b>24h Statistics:</b>\n"
+        f"📈 <b>High:</b> ${high_24h:.6f}\n"
+        f"📉 <b>Low:</b> ${low_24h:.6f}\n"
+        f"💹 <b>Volume:</b> {volume_24h_jkc:,.0f} JKC (${volume_24h_usdt:,.0f})\n\n"
+
+        f"📈 <b>Combined Volume (NonKYC + CoinEx):</b>\n"
+        f"🕐 <b>15m:</b> ${volume_periods['15m']:,.0f}\n"
+        f"🕐 <b>1h:</b> ${volume_periods['1h']:,.0f}\n"
+        f"🕐 <b>4h:</b> ${volume_periods['4h']:,.0f}\n"
+        f"🕐 <b>24h:</b> ${volume_periods['24h']:,.0f}\n\n"
+
+        f"📋 <b>Order Book:</b>\n"
+        f"🟢 <b>Best Bid:</b> ${best_bid:.6f}\n"
+        f"🔴 <b>Best Ask:</b> ${best_ask:.6f}\n"
+        f"📏 <b>Spread:</b> {spread_percent:.2f}%\n\n"
+
+        f"📡 <b>Data Source:</b> NonKYC Exchange"
+    )
+
     await update.message.reply_text(
-        f"⛵️ <b>JunkCoin (JKC) Price</b> ⛵️\n\n"
-        f"💵 <b>Price:</b> {current_price} USDT\n"
-        f"📈 <b>Market Cap:</b> <b>${marketcap:,}</b>",
+        message,
         parse_mode="HTML",
         reply_markup=keyboard
     )
@@ -1947,6 +2239,107 @@ async def debug_command(update: Update, context: CallbackContext) -> None:
 
     await update.message.reply_text(debug_info, parse_mode="HTML")
 
+async def test_command(update: Update, context: CallbackContext) -> None:
+    """Test command to show current data format and simulate alert."""
+    if not await is_admin(update, context):
+        await update.message.reply_text("You do not have permission to use this command.")
+        return
+
+    await update.message.reply_text("🧪 <b>Testing Data Sources...</b>", parse_mode="HTML")
+
+    try:
+        # Test NonKYC data
+        await update.message.reply_text("📊 <b>Testing NonKYC API...</b>", parse_mode="HTML")
+        nonkyc_ticker = await get_nonkyc_ticker()
+        nonkyc_trades = await get_nonkyc_trades()
+
+        nonkyc_info = "📊 <b>NonKYC Data:</b>\n"
+        if nonkyc_ticker:
+            nonkyc_info += f"✅ Ticker: Price ${nonkyc_ticker.get('lastPriceNumber', 'N/A')}\n"
+            nonkyc_info += f"✅ Market Cap: ${nonkyc_ticker.get('marketcapNumber', 'N/A'):,}\n"
+        else:
+            nonkyc_info += "❌ Ticker: Failed to fetch\n"
+
+        if nonkyc_trades:
+            nonkyc_info += f"✅ Trades: {len(nonkyc_trades)} trades fetched\n"
+            if len(nonkyc_trades) > 0:
+                latest_trade = nonkyc_trades[0]
+                nonkyc_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} JKC at ${latest_trade.get('price', 'N/A')}\n"
+        else:
+            nonkyc_info += "❌ Trades: Failed to fetch\n"
+
+        await update.message.reply_text(nonkyc_info, parse_mode="HTML")
+
+        # Test CoinEx data
+        await update.message.reply_text("🏦 <b>Testing CoinEx API...</b>", parse_mode="HTML")
+        coinex_ticker = await get_coinex_ticker()
+        coinex_trades = await get_coinex_trades()
+
+        coinex_info = "🏦 <b>CoinEx Data:</b>\n"
+        if coinex_ticker:
+            coinex_info += f"✅ Ticker: Price ${coinex_ticker.get('last', 'N/A')}\n"
+            coinex_info += f"✅ Volume: {coinex_ticker.get('volume', 'N/A')} JKC\n"
+            coinex_info += f"✅ Value: ${coinex_ticker.get('value', 'N/A')}\n"
+        else:
+            coinex_info += "❌ Ticker: Failed to fetch\n"
+
+        if coinex_trades:
+            coinex_info += f"✅ Trades: {len(coinex_trades)} trades fetched\n"
+            if len(coinex_trades) > 0:
+                latest_trade = coinex_trades[0]
+                coinex_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} JKC at ${latest_trade.get('price', 'N/A')}\n"
+        else:
+            coinex_info += "❌ Trades: Failed to fetch\n"
+
+        await update.message.reply_text(coinex_info, parse_mode="HTML")
+
+        # Test combined volume calculation
+        await update.message.reply_text("📈 <b>Testing Combined Volume...</b>", parse_mode="HTML")
+        volume_data = await calculate_combined_volume_periods()
+
+        volume_info = (
+            "📈 <b>Combined Volume Data:</b>\n"
+            f"🕐 15m: ${volume_data['combined']['15m']:,.0f}\n"
+            f"🕐 1h: ${volume_data['combined']['1h']:,.0f}\n"
+            f"🕐 4h: ${volume_data['combined']['4h']:,.0f}\n"
+            f"🕐 24h: ${volume_data['combined']['24h']:,.0f}\n\n"
+            f"<b>NonKYC:</b> 15m: ${volume_data['nonkyc']['15m']:,.0f}, 24h: ${volume_data['nonkyc']['24h']:,.0f}\n"
+            f"<b>CoinEx:</b> 15m: ${volume_data['coinex']['15m']:,.0f}, 24h: ${volume_data['coinex']['24h']:,.0f}"
+        )
+
+        await update.message.reply_text(volume_info, parse_mode="HTML")
+
+        # Simulate an alert
+        await update.message.reply_text("🚨 <b>Simulating Alert...</b>", parse_mode="HTML")
+
+        # Create a simulated trade that meets threshold
+        simulated_price = 0.027500
+        simulated_quantity = VALUE_REQUIRE / simulated_price + 100  # Ensure it exceeds threshold
+        simulated_value = simulated_price * simulated_quantity
+        simulated_timestamp = int(time.time() * 1000)
+
+        await send_alert(
+            price=simulated_price,
+            quantity=simulated_quantity,
+            sum_value=simulated_value,
+            exchange="Test Exchange (Simulated)",
+            timestamp=simulated_timestamp,
+            exchange_url="https://www.coinex.com/en/exchange/jkc-usdt"
+        )
+
+        await update.message.reply_text(
+            f"✅ <b>Test Complete!</b>\n\n"
+            f"Simulated trade:\n"
+            f"💰 Amount: {simulated_quantity:.2f} JKC\n"
+            f"💵 Price: ${simulated_price:.6f}\n"
+            f"💲 Value: ${simulated_value:.2f} USDT\n"
+            f"🎯 Threshold: ${VALUE_REQUIRE} USDT",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ <b>Test Error:</b> {str(e)}", parse_mode="HTML")
+
 async def heartbeat():
     """Send periodic heartbeat messages to show the bot is running."""
     global running
@@ -1976,6 +2369,7 @@ def main():
     application.add_handler(CommandHandler("ipwan", get_ipwan_command))
     application.add_handler(CommandHandler("toggle_aggregation", toggle_aggregation))
     application.add_handler(CommandHandler("debug", debug_command))  # This should now be defined
+    application.add_handler(CommandHandler("test", test_command))  # Test command for simulating alerts
     application.add_handler(CommandHandler("list_images", list_images_command))
     application.add_handler(CommandHandler("clear_images", clear_images_command))
     
