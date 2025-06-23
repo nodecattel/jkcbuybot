@@ -1,6 +1,6 @@
-# JunkCoin Telegram Alert Bot 🤖⛵️
+# Bitcoin Classic (XBT) Telegram Alert Bot 🤖⛵️
 
-A sophisticated Telegram bot that monitors JunkCoin (JKC) transactions across multiple exchanges and sends real-time alerts for significant trades. Features include sweep detection, trade aggregation, dynamic thresholds, and randomized alert images.
+A sophisticated Telegram bot that monitors Bitcoin Classic (XBT) transactions across multiple exchanges and sends real-time alerts for significant trades. Features include sweep detection, trade aggregation, dynamic thresholds, and randomized alert images.
 
 ## 🌟 Features
 
@@ -35,8 +35,8 @@ A sophisticated Telegram bot that monitors JunkCoin (JKC) transactions across mu
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/nodecattel/jkctelebot.git
-cd jkctelebot
+git clone https://github.com/nodecattel/xbttelebot.git
+cd xbttelebot
 ```
 
 ### 2. Configure the Bot
@@ -49,7 +49,7 @@ Edit the `config.json` file with your settings:
   "active_chat_ids": [],
   "bot_owner": YOUR_TELEGRAM_USER_ID,
   "by_pass": BYPASS_USER_ID,
-  "image_path": "junk_resized.jpeg",
+  "image_path": "xbt_resized.jpeg",
   "dynamic_threshold": {
     "enabled": true,
     "base_value": 100,
@@ -103,7 +103,7 @@ docker logs telebot
 ### Basic Commands
 
 #### 📊 **Information Commands**
-- `/price` - Check current JKC price and market cap
+- `/price` - Check current XBT price and market cap
 - `/chart` - Generate and send a price chart
 - `/help` - Show all available commands
 - `/debug` - Show user ID, chat info, and admin status

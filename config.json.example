@@ -18,7 +18,7 @@
   "by_pass": 0,
   
   "_comment_image_path": "Default image file for alerts (will be overridden by random image collection if available)",
-  "image_path": "junk_resized.jpeg",
+  "image_path": "xbt_buy_alert.gif",
   
   "_comment_dynamic_threshold": "Automatically adjust alert threshold based on trading volume",
   "dynamic_threshold": {

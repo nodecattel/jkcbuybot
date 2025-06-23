@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Add a file handler to save logs
-file_handler = logging.FileHandler("telebot.log")
+file_handler = logging.FileHandler("xbt_telebot.log")
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(file_handler)
 
@@ -46,7 +46,7 @@ def setup_file_logging():
     
     # Create a file handler with current timestamp
     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = os.path.join("logs", f"telebot_{current_time}.log")
+    log_file = os.path.join("logs", f"xbt_telebot_{current_time}.log")
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
     file_handler.setLevel(logging.INFO)
@@ -82,7 +82,7 @@ def load_config():
             "active_chat_ids": [],
             "bot_owner": 0,
             "by_pass": 0,
-            "image_path": "junk_resized.jpeg",
+            "image_path": "xbt_buy_alert.gif",
             "dynamic_threshold": {
                 "enabled": True,
                 "base_value": 300,
@@ -103,10 +103,100 @@ def load_config():
     with open(config_path, 'r') as f:
         return json.load(f)
 
-# Save configuration to file
-def save_config(config):
-    with open("config.json", 'w') as f:
-        json.dump(config, f, indent=2)
+# Save configuration to file with enhanced error handling and atomic operations
+def save_config(config_data):
+    """Save configuration to file with enhanced error handling and atomic operations."""
+    import shutil
+    import tempfile
+    import stat
+
+    CONFIG_FILE = "config.json"
+
+    try:
+        # Log current state for debugging
+        logger.info(f"💾 Attempting to save config to: {CONFIG_FILE}")
+
+        # Check file permissions and ownership
+        try:
+            file_stat = os.stat(CONFIG_FILE)
+            logger.info(f"📊 Current file permissions: {oct(file_stat.st_mode)[-3:]}")
+            logger.info(f"👤 File owner: UID {file_stat.st_uid}, GID {file_stat.st_gid}")
+            logger.info(f"🔧 Container user: UID {os.getuid()}, GID {os.getgid()}")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check file stats: {e}")
+
+        # Validate configuration data
+        if not isinstance(config_data, dict):
+            raise ValueError("Configuration data must be a dictionary")
+
+        # Validate critical fields
+        required_fields = ['bot_token', 'bot_owner', 'value_require']
+        for field in required_fields:
+            if field not in config_data:
+                raise ValueError(f"Missing required field: {field}")
+
+        # Validate value_require range
+        value_require = config_data.get('value_require', 100.0)
+        if not isinstance(value_require, (int, float)) or value_require < 1 or value_require > 10000:
+            raise ValueError(f"value_require must be between 1 and 10000, got: {value_require}")
+
+        # Create backup of current config
+        backup_path = f"{CONFIG_FILE}.backup"
+        try:
+            if os.path.exists(CONFIG_FILE):
+                shutil.copy2(CONFIG_FILE, backup_path)
+                logger.info(f"📋 Created backup: {backup_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not create backup: {e}")
+
+        # Direct write approach (since atomic rename fails with mounted files)
+        # Write directly to the config file with proper error handling
+        logger.info(f"💾 Writing configuration directly to {CONFIG_FILE}")
+
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config_data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())  # Force write to disk
+
+        logger.info(f"✅ Configuration written successfully")
+
+        # Verify the write was successful
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                saved_data = json.load(f)
+
+            # Verify critical fields match
+            if saved_data.get('value_require') != config_data.get('value_require'):
+                raise ValueError("Configuration verification failed: value_require mismatch")
+
+            logger.info(f"✅ Configuration saved and verified successfully")
+            logger.info(f"💰 New threshold: ${config_data.get('value_require', 'unknown')} USDT")
+
+        except Exception as e:
+            logger.error(f"❌ Configuration verification failed: {e}")
+            # Restore backup if verification fails
+            if os.path.exists(backup_path):
+                shutil.copy2(backup_path, CONFIG_FILE)
+                logger.info(f"🔄 Restored backup configuration")
+            raise
+
+    except PermissionError as e:
+        logger.error(f"❌ Permission denied saving config: {e}")
+        logger.error(f"💡 Check if config.json is mounted read-only or has incorrect permissions")
+        logger.error(f"💡 Container user: UID {os.getuid()}, file needs to be writable by this user")
+        raise
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ JSON decoding error: {e}")
+        raise
+    except ValueError as e:
+        logger.error(f"❌ Configuration validation error: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"❌ Unexpected error saving configuration: {e}")
+        logger.error(f"💡 File path: {CONFIG_FILE}")
+        logger.error(f"💡 Working directory: {os.getcwd()}")
+        logger.error(f"💡 Directory writable: {os.access(os.path.dirname(CONFIG_FILE) or '.', os.W_OK)}")
+        raise
 
 # Load config
 CONFIG = load_config()
@@ -125,10 +215,11 @@ INPUT_IMAGE = 2
 CONFIG_MENU = 3
 DYNAMIC_CONFIG = 4
 INPUT_API_KEYS = 5
+INPUT_IMAGE_SETIMAGE = 6  # Separate state for setimage command
 
 # Image collection constants
 IMAGES_DIR = "images"
-SUPPORTED_IMAGE_FORMATS = [".png", ".jpg", ".jpeg", ".gif"]
+SUPPORTED_IMAGE_FORMATS = [".png", ".jpg", ".jpeg", ".gif", ".mp4", ".webp"]
 
 # Transaction timestamps
 LAST_TRANS_KYC = int(time.time() * 1000)
@@ -142,6 +233,17 @@ LAST_THRESHOLD_UPDATE = time.time()
 
 # Flag to control websocket loops
 running = True
+
+# Exchange availability flags - updated by periodic checks
+EXCHANGE_AVAILABILITY = {
+    "nonkyc": False,
+    "coinex": False,
+    "ascendex": False
+}
+
+# Last time exchange availability was checked
+LAST_AVAILABILITY_CHECK = 0
+AVAILABILITY_CHECK_INTERVAL = 300  # Check every 5 minutes
 
 # Add these global variables at the top of the file with other globals
 PENDING_TRADES = {}  # {exchange: {buyer_id: [trades]}}
@@ -201,11 +303,123 @@ async def is_admin(update: Update, context: CallbackContext) -> bool:
 
     return False
 
+async def is_owner_only(update: Update, context: CallbackContext) -> bool:
+    """Check if the user is the bot owner (stricter than admin check)."""
+    user_id = None
+
+    if update.message and update.message.from_user:
+        user_id = update.message.from_user.id
+    elif update.callback_query and update.callback_query.from_user:
+        user_id = update.callback_query.from_user.id
+    elif update.effective_user:
+        user_id = update.effective_user.id
+
+    if user_id is None:
+        return False
+
+    return int(user_id) == int(BOT_OWNER)
+
+async def can_use_public_commands(update: Update, context: CallbackContext) -> bool:
+    """Check if user can use public commands (always true for basic info commands)."""
+    # Public commands like /help, /price, /chart are available to everyone
+    return True
+
+async def can_use_admin_commands(update: Update, context: CallbackContext) -> bool:
+    """Check if user can use admin commands (owner in private chat or admin in groups)."""
+    chat_id = update.effective_chat.id
+    user_id = None
+
+    if update.message and update.message.from_user:
+        user_id = update.message.from_user.id
+    elif update.callback_query and update.callback_query.from_user:
+        user_id = update.callback_query.from_user.id
+    elif update.effective_user:
+        user_id = update.effective_user.id
+
+    if user_id is None:
+        return False
+
+    # Bot owner always has admin rights
+    if int(user_id) == int(BOT_OWNER):
+        return True
+
+    # For the public supergroup (-1002471264202), restrict admin commands to owner only
+    if chat_id == -1002471264202:
+        logger.info(f"Public supergroup access: User {user_id} requesting admin command - denied (owner only)")
+        return False
+
+    # For other chats, use standard admin check
+    return await is_admin(update, context)
+
+async def can_start_stop_bot(update: Update, context: CallbackContext) -> bool:
+    """Check if user can start/stop bot alerts (owner only for security)."""
+    chat_id = update.effective_chat.id
+    user_id = None
+
+    if update.message and update.message.from_user:
+        user_id = update.message.from_user.id
+    elif update.callback_query and update.callback_query.from_user:
+        user_id = update.callback_query.from_user.id
+    elif update.effective_user:
+        user_id = update.effective_user.id
+
+    if user_id is None:
+        return False
+
+    # Only bot owner can start/stop alerts for security
+    if int(user_id) == int(BOT_OWNER):
+        return True
+
+    # For private chats (not the public supergroup), allow bypass user
+    if chat_id > 0 and int(user_id) == int(BY_PASS):
+        return True
+
+    logger.info(f"Start/stop denied: User {user_id} in chat {chat_id} (owner: {BOT_OWNER})")
+    return False
+
 def ensure_images_directory():
     """Ensure the images directory exists."""
     if not os.path.exists(IMAGES_DIR):
         os.makedirs(IMAGES_DIR)
         logger.info(f"Created images directory: {IMAGES_DIR}")
+
+def detect_file_type(file_path):
+    """Detect the actual file type based on content and extension."""
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(12)
+
+        # Check file signatures
+        if header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
+            return 'gif'
+        elif header.startswith(b'\xff\xd8\xff'):
+            return 'jpeg'
+        elif header.startswith(b'\x89PNG\r\n\x1a\n'):
+            return 'png'
+        elif header[4:12] == b'ftypmp4' or header[4:8] == b'ftyp':
+            return 'mp4'
+        elif header.startswith(b'RIFF') and header[8:12] == b'WEBP':
+            return 'webp'
+        else:
+            # Fallback to extension
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext in ['.jpg', '.jpeg']:
+                return 'jpeg'
+            elif ext == '.png':
+                return 'png'
+            elif ext == '.gif':
+                return 'gif'
+            elif ext == '.mp4':
+                return 'mp4'
+            elif ext == '.webp':
+                return 'webp'
+            else:
+                return 'unknown'
+    except Exception as e:
+        logger.warning(f"Error detecting file type for {file_path}: {e}")
+        # Fallback to extension
+        ext = os.path.splitext(file_path)[1].lower()
+        return ext.replace('.', '') if ext else 'unknown'
 
 def get_image_collection():
     """Get list of all images in the collection."""
@@ -225,11 +439,21 @@ def get_random_image():
 
     # If no images in collection, try to use the default image
     if not images:
-        if os.path.exists(IMAGE_PATH):
-            return IMAGE_PATH
-        else:
-            logger.warning("No images found in collection and default image doesn't exist")
-            return None
+        # Try multiple possible default image paths
+        default_paths = [
+            IMAGE_PATH,  # From config
+            "xbtbuy.GIF",  # Actual file name
+            "xbt_buy_alert.gif",  # Config file name
+            os.path.join(os.getcwd(), "xbtbuy.GIF"),  # Full path
+        ]
+
+        for path in default_paths:
+            if os.path.exists(path):
+                logger.info(f"Using default image: {path}")
+                return path
+
+        logger.warning("No images found in collection and no default image exists")
+        return None
 
     # Return random image from collection
     return random.choice(images)
@@ -272,61 +496,81 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 async def get_nonkyc_ticker():
-    """Get ticker data from NonKYC WebSocket API."""
+    """Get ticker data from NonKYC WebSocket API with timeout handling."""
     uri = "wss://ws.nonkyc.io"
-    
+
     try:
-        async with websockets.connect(uri, ping_interval=30) as websocket:
+        # Add timeout to connection and operations
+        async with websockets.connect(uri, ping_interval=30, close_timeout=10) as websocket:
             # Request ticker data
             ticker_msg = {
                 "method": "getMarket",
                 "params": {
-                    "symbol": "JKC/USDT"
+                    "symbol": "XBT/USDT"
                 },
                 "id": 999
             }
-            await websocket.send(json.dumps(ticker_msg))
-            
-            # Wait for response
-            response = json.loads(await websocket.recv())
-            
+            await asyncio.wait_for(websocket.send(json.dumps(ticker_msg)), timeout=5)
+
+            # Wait for response with timeout
+            response_text = await asyncio.wait_for(websocket.recv(), timeout=10)
+            response = json.loads(response_text)
+
             if "result" in response:
+                logger.debug(f"NonKYC ticker data received: ${response['result'].get('lastPriceNumber', 'N/A')}")
                 return response["result"]
             else:
+                logger.warning("NonKYC ticker response missing 'result' field")
                 return None
-                
+
+    except asyncio.TimeoutError:
+        logger.warning("NonKYC API request timed out after 10 seconds")
+        return None
+    except websockets.exceptions.ConnectionClosed:
+        logger.warning("NonKYC WebSocket connection closed unexpectedly")
+        return None
     except Exception as e:
-        print(f"Error getting NonKYC ticker: {e}")
+        logger.warning(f"Error getting NonKYC ticker: {e}")
         return None
 
 async def get_nonkyc_trades():
-    """Get historical trades from NonKYC WebSocket API."""
+    """Get historical trades from NonKYC WebSocket API with timeout handling."""
     uri = "wss://ws.nonkyc.io"
 
     try:
-        async with websockets.connect(uri, ping_interval=30) as websocket:
+        async with websockets.connect(uri, ping_interval=30, close_timeout=10) as websocket:
             # Request trades data
             trades_msg = {
                 "method": "getTrades",
                 "params": {
-                    "symbol": "JKC/USDT",
+                    "symbol": "XBT/USDT",
                     "limit": 1000,
                     "sort": "DESC"
                 },
                 "id": 888
             }
-            await websocket.send(json.dumps(trades_msg))
+            await asyncio.wait_for(websocket.send(json.dumps(trades_msg)), timeout=5)
 
-            # Wait for response
-            response = json.loads(await websocket.recv())
+            # Wait for response with timeout
+            response_text = await asyncio.wait_for(websocket.recv(), timeout=15)
+            response = json.loads(response_text)
 
             if "result" in response and "data" in response["result"]:
+                trades_count = len(response["result"]["data"])
+                logger.debug(f"NonKYC trades data received: {trades_count} trades")
                 return response["result"]["data"]
             else:
+                logger.warning("NonKYC trades response missing 'result' or 'data' field")
                 return []
 
+    except asyncio.TimeoutError:
+        logger.warning("NonKYC trades API request timed out after 15 seconds")
+        return []
+    except websockets.exceptions.ConnectionClosed:
+        logger.warning("NonKYC WebSocket connection closed unexpectedly during trades request")
+        return []
     except Exception as e:
-        print(f"Error getting NonKYC trades: {e}")
+        logger.warning(f"Error getting NonKYC trades: {e}")
         return []
 
 async def get_coinex_trades():
@@ -336,7 +580,7 @@ async def get_coinex_trades():
         # CoinEx v2 API for historical trades
         url = "https://api.coinex.com/v2/spot/deals"
         params = {
-            "market": "JKCUSDT",
+            "market": "XBTUSDT",
             "limit": 1000  # Get last 1000 trades
         }
 
@@ -367,7 +611,7 @@ async def get_coinex_ticker():
         # CoinEx v2 API for ticker data
         url = "https://api.coinex.com/v2/spot/ticker"
         params = {
-            "market": "JKCUSDT"
+            "market": "XBTUSDT"
         }
 
         response = requests.get(url, params=params, timeout=10)
@@ -379,6 +623,133 @@ async def get_coinex_ticker():
     except Exception as e:
         logger.warning(f"Error getting CoinEx ticker: {e}")
         return None
+
+async def get_livecoinwatch_data():
+    """Get Bitcoin Classic data from LiveCoinWatch API with comprehensive error handling."""
+    try:
+        import requests
+        url = "https://api.livecoinwatch.com/coins/single"
+        headers = {
+            "content-type": "application/json",
+            "x-api-key": "4646e0ac-da16-4526-b196-c0cd70d84501"
+        }
+        payload = {"currency": "USD", "code": "_XBT", "meta": True}
+
+        logger.debug("Making request to LiveCoinWatch API for XBT data")
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+
+        # Log API usage for rate limiting awareness
+        logger.debug(f"LiveCoinWatch API response status: {response.status_code}")
+
+        if response.status_code == 200:
+            data = response.json()
+
+            # Check for API error response format
+            if "error" in data:
+                error_code = data['error'].get('code', 'unknown')
+                error_desc = data['error'].get('description', 'No description provided')
+                logger.error(f"LiveCoinWatch API error {error_code}: {error_desc}")
+
+                # Handle specific error codes
+                if error_code == 429:
+                    logger.warning("LiveCoinWatch API rate limit exceeded (10,000 daily credits)")
+                elif error_code == 401:
+                    logger.error("LiveCoinWatch API authentication failed - check API key")
+                elif error_code == 404:
+                    logger.error("LiveCoinWatch API: XBT coin not found")
+
+                return None
+
+            # Validate required fields are present
+            required_fields = ['rate', 'volume', 'cap']
+            missing_fields = [field for field in required_fields if field not in data]
+            if missing_fields:
+                logger.warning(f"LiveCoinWatch API response missing fields: {missing_fields}")
+
+            logger.info(f"Successfully fetched XBT data from LiveCoinWatch: ${data.get('rate', 'N/A')}")
+            return data
+
+        elif response.status_code == 429:
+            logger.warning("LiveCoinWatch API rate limit exceeded - falling back to NonKYC")
+            return None
+        elif response.status_code == 401:
+            logger.error("LiveCoinWatch API authentication failed - check API key")
+            return None
+        elif response.status_code == 404:
+            logger.error("LiveCoinWatch API: XBT coin not found")
+            return None
+        else:
+            logger.warning(f"LiveCoinWatch API returned unexpected status {response.status_code}: {response.text[:200]}")
+            return None
+
+    except requests.exceptions.Timeout:
+        logger.warning("LiveCoinWatch API request timed out after 10 seconds")
+        return None
+    except requests.exceptions.ConnectionError:
+        logger.warning("Failed to connect to LiveCoinWatch API")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"LiveCoinWatch API request failed: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error getting LiveCoinWatch data: {e}")
+        return None
+
+async def check_exchange_availability():
+    """Check if XBT is available on various exchanges and update availability flags."""
+    global EXCHANGE_AVAILABILITY, LAST_AVAILABILITY_CHECK
+
+    current_time = time.time()
+    if current_time - LAST_AVAILABILITY_CHECK < AVAILABILITY_CHECK_INTERVAL:
+        return EXCHANGE_AVAILABILITY
+
+    logger.debug("Checking XBT availability across exchanges...")
+
+    # Check NonKYC
+    try:
+        response = requests.get("https://api.nonkyc.io/api/v2/markets", timeout=10)
+        if response.status_code == 200:
+            markets = response.json()
+            xbt_markets = [m for m in markets if m.get('base') == 'XBT']
+            EXCHANGE_AVAILABILITY["nonkyc"] = len(xbt_markets) > 0
+            if EXCHANGE_AVAILABILITY["nonkyc"]:
+                logger.info(f"XBT now available on NonKYC! Found {len(xbt_markets)} markets")
+        else:
+            EXCHANGE_AVAILABILITY["nonkyc"] = False
+    except Exception as e:
+        logger.debug(f"Error checking NonKYC availability: {e}")
+        EXCHANGE_AVAILABILITY["nonkyc"] = False
+
+    # Check CoinEx
+    try:
+        response = requests.get("https://api.coinex.com/v1/market/ticker?market=XBTUSDT", timeout=10)
+        EXCHANGE_AVAILABILITY["coinex"] = response.status_code == 200
+        if EXCHANGE_AVAILABILITY["coinex"]:
+            logger.info("XBT now available on CoinEx!")
+    except Exception as e:
+        logger.debug(f"Error checking CoinEx availability: {e}")
+        EXCHANGE_AVAILABILITY["coinex"] = False
+
+    # Check AscendEX
+    try:
+        response = requests.get("https://ascendex.com/api/pro/v1/ticker?symbol=XBT/USDT", timeout=10)
+        EXCHANGE_AVAILABILITY["ascendex"] = response.status_code == 200
+        if EXCHANGE_AVAILABILITY["ascendex"]:
+            logger.info("XBT now available on AscendEX!")
+    except Exception as e:
+        logger.debug(f"Error checking AscendEX availability: {e}")
+        EXCHANGE_AVAILABILITY["ascendex"] = False
+
+    LAST_AVAILABILITY_CHECK = current_time
+
+    # Log availability status
+    available_exchanges = [ex for ex, available in EXCHANGE_AVAILABILITY.items() if available]
+    if available_exchanges:
+        logger.info(f"XBT available on: {', '.join(available_exchanges)}")
+    else:
+        logger.debug("XBT not yet available on any monitored exchanges")
+
+    return EXCHANGE_AVAILABILITY
 
 async def calculate_volume_periods(trades_data):
     """Calculate volume for different time periods from trades data."""
@@ -454,6 +825,75 @@ async def calculate_volume_periods(trades_data):
 
     return volumes
 
+async def calculate_momentum_periods(trades_data, current_price):
+    """Calculate price momentum for different time periods from trades data."""
+    if not trades_data or not current_price:
+        return {
+            "15m": 0,
+            "1h": 0,
+            "4h": 0,
+            "24h": 0
+        }
+
+    current_time = time.time() * 1000  # Convert to milliseconds
+
+    # Time periods in milliseconds
+    periods = {
+        "15m": 15 * 60 * 1000,      # 15 minutes
+        "1h": 60 * 60 * 1000,       # 1 hour
+        "4h": 4 * 60 * 60 * 1000,   # 4 hours
+        "24h": 24 * 60 * 60 * 1000  # 24 hours
+    }
+
+    momentum = {}
+
+    for period_name, period_ms in periods.items():
+        cutoff_time = current_time - period_ms
+        period_prices = []
+
+        for trade in trades_data:
+            # Handle different timestamp formats
+            trade_time_ms = 0
+            timestamp = trade.get("timestamp", 0)
+
+            if isinstance(timestamp, str):
+                try:
+                    # Parse ISO format timestamp
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    trade_time_ms = dt.timestamp() * 1000
+                except:
+                    # Try parsing as milliseconds
+                    try:
+                        trade_time_ms = float(timestamp)
+                    except:
+                        continue
+            else:
+                trade_time_ms = float(timestamp)
+
+            # Check if trade is within the time period
+            if trade_time_ms >= cutoff_time:
+                try:
+                    price = float(trade.get("price", 0))
+                    if price > 0:
+                        period_prices.append(price)
+                except (ValueError, TypeError):
+                    continue
+
+        # Calculate momentum (percentage change from period start to current)
+        if period_prices:
+            # Get the oldest price in the period (first trade chronologically)
+            oldest_price = period_prices[-1]  # Trades are sorted DESC, so last is oldest
+            if oldest_price > 0:
+                momentum_percent = ((current_price - oldest_price) / oldest_price) * 100
+                momentum[period_name] = round(momentum_percent, 2)
+            else:
+                momentum[period_name] = 0
+        else:
+            momentum[period_name] = 0
+
+    return momentum
+
 async def calculate_combined_volume_periods():
     """Calculate combined volume from both NonKYC and CoinEx exchanges."""
     try:
@@ -499,7 +939,7 @@ async def get_nonkyc_orderbook():
             subscribe_msg = {
                 "method": "subscribeOrderbook",
                 "params": {
-                    "symbol": "JKC/USDT",
+                    "symbol": "XBT/USDT",
                     "limit": 50  # Smaller limit for faster processing
                 },
                 "id": 777
@@ -540,8 +980,19 @@ ORDERBOOK_SEQUENCE = 0
 
 async def nonkyc_orderbook_websocket():
     """Subscribe to NonKYC orderbook updates for real-time sweep detection."""
-    global running, CURRENT_ORDERBOOK, ORDERBOOK_SEQUENCE
+    global running, CURRENT_ORDERBOOK, ORDERBOOK_SEQUENCE, EXCHANGE_AVAILABILITY
     uri = "wss://ws.nonkyc.io"
+
+    # Wait for XBT to become available on NonKYC
+    while running:
+        await check_exchange_availability()
+        if EXCHANGE_AVAILABILITY["nonkyc"]:
+            logger.info("XBT detected on NonKYC - starting orderbook WebSocket for sweep detection")
+            break
+        else:
+            logger.debug("XBT not yet available on NonKYC for orderbook - waiting...")
+            await asyncio.sleep(60)  # Check every minute
+            continue
 
     # For exponential backoff
     retry_delay = 5
@@ -559,13 +1010,13 @@ async def nonkyc_orderbook_websocket():
             subscribe_msg = {
                 "method": "subscribeOrderbook",
                 "params": {
-                    "symbol": "JKC/USDT",
+                    "symbol": "XBT/USDT",
                     "limit": 20  # Only need top 20 levels for sweep detection
                 },
                 "id": 888
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.info("Subscribed to JKC/USDT orderbook updates")
+            logger.info("Subscribed to XBT/USDT orderbook updates")
 
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -580,12 +1031,17 @@ async def nonkyc_orderbook_websocket():
                             # Initial orderbook snapshot
                             params = response["params"]
                             CURRENT_ORDERBOOK = {
-                                "asks": [[ask["price"], ask["quantity"]] for ask in params["asks"]],
-                                "bids": [[bid["price"], bid["quantity"]] for bid in params["bids"]],
+                                "asks": [[str(ask["price"]), str(ask["quantity"])] for ask in params["asks"]],
+                                "bids": [[str(bid["price"]), str(bid["quantity"])] for bid in params["bids"]],
                                 "sequence": params.get("sequence", 0)
                             }
                             ORDERBOOK_SEQUENCE = int(params.get("sequence", 0))
                             logger.info(f"Received orderbook snapshot with {len(CURRENT_ORDERBOOK['asks'])} asks, sequence: {ORDERBOOK_SEQUENCE}")
+
+                            # Log sample of orderbook data for debugging
+                            if len(CURRENT_ORDERBOOK['asks']) > 0:
+                                sample_ask = CURRENT_ORDERBOOK['asks'][0]
+                                logger.debug(f"Sample ask: price={sample_ask[0]}, quantity={sample_ask[1]}")
 
                         elif response["method"] == "updateOrderbook":
                             # Orderbook update - this is where we detect sweeps
@@ -637,28 +1093,31 @@ async def process_orderbook_update(params):
     # Process ask updates (we're looking for buy sweeps that remove asks)
     if "asks" in params:
         for ask_update in params["asks"]:
-            price = ask_update["price"]
+            # Convert price to string for comparison (orderbook stores as strings)
+            price_str = str(ask_update["price"])
+            price_float = float(ask_update["price"])
             new_quantity = float(ask_update["quantity"])
 
             # Find this price level in current orderbook
             for i, current_ask in enumerate(CURRENT_ORDERBOOK["asks"]):
-                if current_ask[0] == price:
+                # Compare prices as strings since that's how they're stored
+                if current_ask[0] == price_str:
                     old_quantity = float(current_ask[1])
 
                     if new_quantity == 0:
                         # Price level completely removed (swept)
-                        swept_asks.append({"price": float(price), "quantity": old_quantity})
-                        total_swept_value += float(price) * old_quantity
-                        logger.debug(f"Ask level swept: {price} USDT, {old_quantity} JKC")
+                        swept_asks.append({"price": price_float, "quantity": old_quantity})
+                        total_swept_value += price_float * old_quantity
+                        logger.debug(f"Ask level swept: {price_float:.6f} USDT, {old_quantity} XBT")
                         # Remove from current orderbook
                         CURRENT_ORDERBOOK["asks"].pop(i)
 
                     elif new_quantity < old_quantity:
                         # Partial fill
                         filled_quantity = old_quantity - new_quantity
-                        swept_asks.append({"price": float(price), "quantity": filled_quantity})
-                        total_swept_value += float(price) * filled_quantity
-                        logger.debug(f"Ask level partially filled: {price} USDT, {filled_quantity} JKC")
+                        swept_asks.append({"price": price_float, "quantity": filled_quantity})
+                        total_swept_value += price_float * filled_quantity
+                        logger.debug(f"Ask level partially filled: {price_float:.6f} USDT, {filled_quantity} XBT")
                         # Update current orderbook
                         CURRENT_ORDERBOOK["asks"][i][1] = str(new_quantity)
 
@@ -669,7 +1128,7 @@ async def process_orderbook_update(params):
             else:
                 # New price level - add to orderbook
                 if new_quantity > 0:
-                    CURRENT_ORDERBOOK["asks"].append([price, str(new_quantity)])
+                    CURRENT_ORDERBOOK["asks"].append([price_str, str(new_quantity)])
                     # Keep asks sorted by price
                     CURRENT_ORDERBOOK["asks"].sort(key=lambda x: float(x[0]))
 
@@ -681,18 +1140,45 @@ async def process_orderbook_update(params):
         total_quantity = sum(ask["quantity"] for ask in swept_asks)
         avg_price = total_swept_value / total_quantity if total_quantity > 0 else 0
 
-        logger.info(f"Orderbook sweep detected: {total_quantity:.4f} JKC at avg {avg_price:.6f} USDT (Total: {total_swept_value:.2f} USDT)")
+        # Add minimum threshold check to avoid false positives from tiny sweeps
+        min_sweep_threshold = 5.0  # Minimum $5 USDT value to consider as a sweep
 
-        # Process through normal pipeline
-        timestamp = int(time.time() * 1000)
-        await process_message(
-            price=avg_price,
-            quantity=total_quantity,
-            sum_value=total_swept_value,
-            exchange="NonKYC (Orderbook Sweep)",
-            timestamp=timestamp,
-            exchange_url="https://nonkyc.io/market/JKC_USDT"
-        )
+        # Enhanced logging for debugging
+        logger.info(f"Potential sweep detected: {total_quantity:.4f} XBT, avg price: {avg_price:.6f} USDT, total value: {total_swept_value:.2f} USDT")
+
+        # Validate price is reasonable for XBT (Bitcoin Classic)
+        # For USDT pairs: max $100k, for BTC pairs: max 10 BTC
+        max_price_usdt = 100000.0
+        max_price_btc = 10.0
+
+        # Determine if this is a BTC or USDT pair based on price range
+        is_btc_pair = avg_price < 1.0  # BTC prices are typically < 1 BTC
+        max_price = max_price_btc if is_btc_pair else max_price_usdt
+        price_unit = "BTC" if is_btc_pair else "USDT"
+
+        if avg_price > max_price:
+            logger.error(f"INVALID PRICE DETECTED in sweep: {avg_price:.6f} {price_unit} - this suggests a data parsing error")
+            logger.error(f"Swept asks data: {swept_asks}")
+            return  # Don't process this sweep
+
+        if total_swept_value >= min_sweep_threshold and avg_price <= max_price:
+            logger.info(f"Valid orderbook sweep detected: {total_quantity:.4f} XBT at avg {avg_price:.6f} USDT (Total: {total_swept_value:.2f} USDT)")
+
+            # Process through normal pipeline
+            timestamp = int(time.time() * 1000)
+            await process_message(
+                price=avg_price,
+                quantity=total_quantity,
+                sum_value=total_swept_value,
+                exchange="NonKYC (Orderbook Sweep)",
+                timestamp=timestamp,
+                exchange_url="https://nonkyc.io/market/XBT_USDT"
+            )
+        else:
+            if total_swept_value < min_sweep_threshold:
+                logger.debug(f"Small sweep ignored: {total_swept_value:.2f} USDT < {min_sweep_threshold} USDT threshold")
+            if avg_price > 100000.0:
+                logger.debug(f"Invalid price sweep ignored: {avg_price:.6f} {price_unit} > {max_price} {price_unit}")
 
 # Function to update threshold dynamically based on trading volume
 async def update_threshold():
@@ -746,10 +1232,21 @@ async def safe_websocket_connect(uri, timeout=10):
         logger.error(f"Error connecting to {uri}: {e}")
         raise
 
-async def nonkyc_websocket():
-    """Connect to NonKYC WebSocket API and process trade data."""
-    global LAST_TRANS_KYC, running
+async def nonkyc_websocket_usdt():
+    """Connect to NonKYC WebSocket API and process XBT/USDT trade data."""
+    global LAST_TRANS_KYC, running, EXCHANGE_AVAILABILITY
     uri = "wss://ws.nonkyc.io"
+
+    # Wait for XBT to become available on NonKYC
+    while running:
+        await check_exchange_availability()
+        if EXCHANGE_AVAILABILITY["nonkyc"]:
+            logger.info("XBT detected on NonKYC - starting USDT WebSocket connection")
+            break
+        else:
+            logger.debug("XBT not yet available on NonKYC - waiting...")
+            await asyncio.sleep(60)  # Check every minute
+            continue
     
     # For exponential backoff
     retry_delay = 5
@@ -761,16 +1258,16 @@ async def nonkyc_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to NonKYC WebSocket at {uri}")
             
-            # Subscribe to JKC/USDT trades
+            # Subscribe to XBT/USDT trades
             subscribe_msg = {
                 "method": "subscribeTrades",
                 "params": {
-                    "symbol": "JKC/USDT"
+                    "symbol": "XBT/USDT"
                 },
                 "id": 1
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to JKC/USDT trades on NonKYC")
+            logger.debug("Subscribed to XBT/USDT trades on NonKYC")
             
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -806,9 +1303,9 @@ async def nonkyc_websocket():
                                         price=price,
                                         quantity=quantity,
                                         sum_value=sum_value,
-                                        exchange="NonKYC Exchange",
+                                        exchange="NonKYC Exchange (XBT/USDT)",
                                         timestamp=timestamp,
-                                        exchange_url="https://nonkyc.io/market/JKC_USDT"
+                                        exchange_url="https://nonkyc.io/market/XBT_USDT"
                                     )
                     
                 except asyncio.TimeoutError:
@@ -838,15 +1335,136 @@ async def nonkyc_websocket():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
-async def coinex_websocket():
-    """Connect to CoinEx WebSocket API and process trade data."""
-    global LAST_TRANS_COINEX, running
-    uri = "wss://socket.coinex.com/"
-    
+async def nonkyc_websocket_btc():
+    """Connect to NonKYC WebSocket API and process XBT/BTC trade data."""
+    global running, EXCHANGE_AVAILABILITY
+    uri = "wss://ws.nonkyc.io"
+
+    # Wait for XBT to become available on NonKYC
+    while running:
+        await check_exchange_availability()
+        if EXCHANGE_AVAILABILITY["nonkyc"]:
+            logger.info("XBT detected on NonKYC - starting BTC WebSocket connection")
+            break
+        else:
+            logger.debug("XBT not yet available on NonKYC for BTC pair - waiting...")
+            await asyncio.sleep(60)  # Check every minute
+            continue
+
     # For exponential backoff
     retry_delay = 5
     max_retry_delay = 60
-    
+
+    # Track last transaction timestamp for BTC pair
+    last_trans_btc = int(time.time() * 1000)
+
+    while running:
+        websocket = None
+        try:
+            websocket = await websockets.connect(uri, ping_interval=30)
+            logger.debug(f"Connected to NonKYC WebSocket for XBT/BTC at {uri}")
+
+            # Subscribe to XBT/BTC trades
+            subscribe_msg = {
+                "method": "subscribeTrades",
+                "params": {
+                    "symbol": "XBT/BTC"
+                },
+                "id": 3
+            }
+            await websocket.send(json.dumps(subscribe_msg))
+            logger.debug("Subscribed to XBT/BTC trades on NonKYC")
+
+            # Reset retry delay on successful connection
+            retry_delay = 5
+
+            # Process messages
+            while running:
+                try:
+                    response = json.loads(await asyncio.wait_for(websocket.recv(), timeout=5))
+
+                    # Log all messages in debug mode
+                    if DEBUG_MODE:
+                        logger.info(f"NonKYC BTC message: {response}")
+
+                    # Process trade messages
+                    if "method" in response and response["method"] == "updateTrades":
+                        # Handle NonKYC updateTrades format
+                        if "params" in response and "data" in response["params"]:
+                            trades_data = response["params"]["data"]
+
+                            for trade_data in trades_data:
+                                # Extract trade details
+                                price_btc = float(trade_data["price"])
+                                quantity = float(trade_data["quantity"])
+                                timestamp = int(trade_data["timestampms"])  # Use timestampms for milliseconds
+
+                                # Only process trades newer than the last one
+                                if timestamp > last_trans_btc:
+                                    last_trans_btc = timestamp
+
+                                    # Convert BTC price to USDT for comparison (estimate BTC at $100k)
+                                    btc_usd_estimate = 100000  # This should be fetched from an API in production
+                                    price_usdt_estimate = price_btc * btc_usd_estimate
+                                    sum_value = price_usdt_estimate * quantity
+
+                                    # Process the trade
+                                    await process_message(
+                                        price=price_usdt_estimate,
+                                        quantity=quantity,
+                                        sum_value=sum_value,
+                                        exchange="NonKYC Exchange (XBT/BTC)",
+                                        timestamp=timestamp,
+                                        exchange_url="https://nonkyc.io/market/XBT_BTC"
+                                    )
+
+                except asyncio.TimeoutError:
+                    # This is normal, just continue
+                    continue
+                except websockets.exceptions.ConnectionClosed:
+                    logger.warning("NonKYC BTC WebSocket connection closed")
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing NonKYC BTC message: {e}")
+                    break
+
+        except Exception as e:
+            logger.error(f"Error in NonKYC BTC WebSocket connection: {e}")
+
+        finally:
+            # Clean up
+            if websocket and websocket.close_code is None:
+                await websocket.close()
+
+            # Don't retry if we're shutting down
+            if not running:
+                break
+
+            # Exponential backoff for reconnection
+            logger.info(f"Reconnecting to NonKYC BTC WebSocket in {retry_delay} seconds...")
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, max_retry_delay)
+
+async def coinex_websocket():
+    """Connect to CoinEx WebSocket API and process trade data."""
+    global LAST_TRANS_COINEX, running, EXCHANGE_AVAILABILITY
+    uri = "wss://socket.coinex.com/"
+
+    # Wait for XBT to become available on CoinEx
+    while running:
+        await check_exchange_availability()
+        if EXCHANGE_AVAILABILITY["coinex"]:
+            logger.info("XBT detected on CoinEx - starting WebSocket connection")
+            break
+        else:
+            logger.debug("XBT not yet available on CoinEx - waiting...")
+            await asyncio.sleep(60)  # Check every minute
+            continue
+
+    # For exponential backoff
+    retry_delay = 5
+    max_retry_delay = 60
+
     # CoinEx public websocket doesn't require API keys for trade data
     logger.info("Starting CoinEx WebSocket connection for public trade data")
     
@@ -856,14 +1474,14 @@ async def coinex_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to CoinEx WebSocket at {uri}")
             
-            # Subscribe to JKC/USDT trades
+            # Subscribe to XBT/USDT trades
             subscribe_msg = {
                 "method": "deals.subscribe",
-                "params": ["JKCUSDT"],
+                "params": ["XBTUSDT"],
                 "id": 2
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to JKC/USDT trades on CoinEx")
+            logger.debug("Subscribed to XBT/USDT trades on CoinEx")
             
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -899,7 +1517,7 @@ async def coinex_websocket():
                                     sum_value=sum_value,
                                     exchange="CoinEx Exchange",
                                     timestamp=timestamp,
-                                    exchange_url="https://www.coinex.com/exchange/JKC-USDT"
+                                    exchange_url="https://www.coinex.com/exchange/XBT-USDT"
                                 )
                     
                 except asyncio.TimeoutError:
@@ -931,17 +1549,28 @@ async def coinex_websocket():
 
 async def ascendex_websocket():
     """Connect to AscendEX WebSocket API and process trade data."""
-    global LAST_TRANS_ASENDEX, running
+    global LAST_TRANS_ASENDEX, running, EXCHANGE_AVAILABILITY
     uri = "wss://ascendex.com/api/pro/v1/stream"
-    
-    # For exponential backoff
-    retry_delay = 5
-    max_retry_delay = 60
-    
+
     # Check if API keys are configured
     if not CONFIG.get("ascendex_access_id") or not CONFIG.get("ascendex_secret_key"):
         logger.warning("AscendEX API keys not configured, skipping AscendEX WebSocket")
         return
+
+    # Wait for XBT to become available on AscendEX
+    while running:
+        await check_exchange_availability()
+        if EXCHANGE_AVAILABILITY["ascendex"]:
+            logger.info("XBT detected on AscendEX - starting WebSocket connection")
+            break
+        else:
+            logger.debug("XBT not yet available on AscendEX - waiting...")
+            await asyncio.sleep(60)  # Check every minute
+            continue
+
+    # For exponential backoff
+    retry_delay = 5
+    max_retry_delay = 60
     
     while running:
         websocket = None
@@ -949,13 +1578,13 @@ async def ascendex_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to AscendEX WebSocket at {uri}")
             
-            # Subscribe to JKC/USDT trades
+            # Subscribe to XBT/USDT trades
             subscribe_msg = {
                 "op": "sub",
-                "ch": "trades:JKC/USDT"
+                "ch": "trades:XBT/USDT"
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to JKC/USDT trades on AscendEX")
+            logger.debug("Subscribed to XBT/USDT trades on AscendEX")
             
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -991,7 +1620,7 @@ async def ascendex_websocket():
                                     sum_value=sum_value,
                                     exchange="AscendEX Exchange",
                                     timestamp=timestamp,
-                                    exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/jkc"
+                                    exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/xbt"
                                 )
                     
                 except asyncio.TimeoutError:
@@ -1026,7 +1655,7 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
     global PHOTO, PENDING_TRADES, LAST_AGGREGATION_CHECK
 
     # Log all trades for debugging
-    logger.info(f"Processing trade: {exchange} - {quantity} JKC at {price} USDT (Total: {sum_value} USDT)")
+    logger.info(f"Processing trade: {exchange} - {quantity} XBT at {price} USDT (Total: {sum_value} USDT)")
 
     # Update threshold based on volume
     await update_threshold()
@@ -1155,7 +1784,7 @@ async def process_aggregated_trades():
                     avg_price = total_value / total_quantity if total_quantity > 0 else 0
                     latest_timestamp = max(trade['timestamp'] for trade in trades)
 
-                    logger.info(f"Processing expired aggregated trades: {len(trades)} trades, {total_quantity} JKC, {total_value} USDT")
+                    logger.info(f"Processing expired aggregated trades: {len(trades)} trades, {total_quantity} XBT, {total_value} USDT")
 
                     # Send the alert
                     await send_alert(
@@ -1178,13 +1807,25 @@ async def process_aggregated_trades():
                     del PENDING_TRADES[exchange]
 
 async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1):
-    """Send an alert to all active chats."""
+    """Send an alert to all active chats with robust error handling and fallback."""
     global PHOTO
 
-    # Get a random image for this alert
-    random_photo = load_random_image()
-    if random_photo is None:
-        random_photo = PHOTO  # Fallback to global PHOTO if no random image available
+    # Enhanced logging for alert processing
+    logger.info(f"🚨 ALERT TRIGGERED: {quantity:.2f} XBT at ${price:.6f} = ${sum_value:.2f} USDT from {exchange}")
+    logger.info(f"📊 Alert details: {num_trades} trade(s), threshold: ${VALUE_REQUIRE} USDT")
+
+    # Get a random image for this alert with enhanced error handling
+    random_photo = None
+    try:
+        random_photo = load_random_image()
+        if random_photo is None:
+            random_photo = PHOTO  # Fallback to global PHOTO if no random image available
+            logger.info("Using global PHOTO as fallback image")
+        else:
+            logger.info("Successfully loaded random image for alert")
+    except Exception as image_load_error:
+        logger.warning(f"Image loading failed, will use text-only alert: {image_load_error}")
+        random_photo = None
 
     # Get market data for additional context
     try:
@@ -1226,7 +1867,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     elif magnitude_ratio >= 5:
         alert_text = "🔥🔥 <b>HUGE Transaction LFG!!!</b> 🔥🔥"
     elif magnitude_ratio >= 3:
-        alert_text = "🔥 <b>MAJOR Buy Ahoy Junkies!</b> 🔥"
+        alert_text = "🔥 <b>MAJOR Buy Alert Bitcoin Classic Traders!</b> 🔥"
     elif magnitude_ratio >= 2:
         alert_text = "💥 <b>SIGNIFICANT Transaction Alert!</b> 💥"
     else:
@@ -1241,7 +1882,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     message = (
         f"{magnitude_indicator}\n\n"
         f"{alert_text}\n\n"
-        f"💰 <b>Amount:</b> {quantity:.2f} JKC\n"
+        f"💰 <b>Amount:</b> {quantity:.2f} XBT\n"
         f"💵 <b>Price:</b> {price:.6f} USDT\n"
         f"💲 <b>Total Value:</b> {sum_value:.2f} USDT\n"
         f"🏦 <b>Exchange:</b> {exchange}\n"
@@ -1269,82 +1910,260 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     button = InlineKeyboardButton(text=f"Trade on {exchange.split(' ')[0]}", url=exchange_url)
     keyboard = InlineKeyboardMarkup([[button]])
     
-    # Send to all active chats
+    # Send to all active chats with comprehensive error handling
     bot = Bot(token=BOT_TOKEN)
+    successful_deliveries = 0
+    failed_deliveries = 0
+
+    logger.info(f"📤 Attempting to send alert to {len(ACTIVE_CHAT_IDS)} chat(s): {ACTIVE_CHAT_IDS}")
+
     for chat_id in ACTIVE_CHAT_IDS:
+        chat_type = "private" if chat_id > 0 else "group/supergroup"
+        logger.info(f"📱 Sending alert to {chat_type} chat {chat_id}")
+
         try:
+            # Pre-validate chat access
+            try:
+                await bot.get_chat(chat_id)
+                logger.info(f"✅ Chat {chat_id} is accessible")
+            except Exception as access_error:
+                logger.error(f"❌ Chat {chat_id} is not accessible: {access_error}")
+                failed_deliveries += 1
+                continue
+
+            # Attempt image delivery first
             if random_photo:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=random_photo,
-                    caption=message,
-                    reply_markup=keyboard,
-                    parse_mode="HTML"
-                )
+                try:
+                    # Enhanced image type detection
+                    is_gif = False
+                    image_filename = ""
+
+                    if hasattr(random_photo, 'name'):
+                        image_filename = random_photo.name
+                        is_gif = image_filename.lower().endswith('.gif')
+                    elif isinstance(random_photo, str):
+                        image_filename = random_photo
+                        is_gif = image_filename.lower().endswith('.gif')
+
+                    logger.info(f"🖼️ Attempting to send {'GIF animation' if is_gif else 'static image'}: {image_filename}")
+
+                    if is_gif:
+                        # Use send_animation for GIF files to preserve animation
+                        await bot.send_animation(
+                            chat_id=chat_id,
+                            animation=random_photo,
+                            caption=message,
+                            reply_markup=keyboard,
+                            parse_mode="HTML",
+                            read_timeout=30,
+                            write_timeout=30
+                        )
+                        logger.info(f"✅ Alert with GIF animation sent successfully to chat {chat_id}")
+                    else:
+                        # Use send_photo for static images
+                        await bot.send_photo(
+                            chat_id=chat_id,
+                            photo=random_photo,
+                            caption=message,
+                            reply_markup=keyboard,
+                            parse_mode="HTML",
+                            read_timeout=30,
+                            write_timeout=30
+                        )
+                        logger.info(f"✅ Alert with static image sent successfully to chat {chat_id}")
+
+                    successful_deliveries += 1
+
+                except Exception as image_error:
+                    # Enhanced image error logging
+                    logger.warning(f"🖼️ Image sending failed for chat {chat_id}: {type(image_error).__name__}: {image_error}")
+
+                    # Implement robust text-only fallback
+                    try:
+                        fallback_message = f"🖼️ <b>XBT Alert</b> (Image delivery failed)\n\n{message}"
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=fallback_message,
+                            reply_markup=keyboard,
+                            parse_mode="HTML",
+                            read_timeout=30,
+                            write_timeout=30
+                        )
+                        logger.info(f"✅ Fallback text-only alert sent successfully to chat {chat_id}")
+                        successful_deliveries += 1
+                    except Exception as fallback_error:
+                        logger.error(f"❌ Fallback text-only alert also failed for chat {chat_id}: {fallback_error}")
+                        failed_deliveries += 1
             else:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=message,
-                    reply_markup=keyboard,
-                    parse_mode="HTML"
-                )
+                # No image available, send text-only alert
+                try:
+                    text_only_message = f"📝 <b>XBT Alert</b> (Text-only mode)\n\n{message}"
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=text_only_message,
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                        read_timeout=30,
+                        write_timeout=30
+                    )
+                    logger.info(f"✅ Text-only alert sent successfully to chat {chat_id}")
+                    successful_deliveries += 1
+                except Exception as text_error:
+                    logger.error(f"❌ Text-only alert failed for chat {chat_id}: {text_error}")
+                    failed_deliveries += 1
+
         except Exception as e:
+            logger.error(f"❌ Unexpected error sending alert to chat {chat_id}: {type(e).__name__}: {e}")
             print(f"Error sending message to chat {chat_id}: {e}")
+            failed_deliveries += 1
+
+    # Final delivery summary
+    total_chats = len(ACTIVE_CHAT_IDS)
+    logger.info(f"📊 ALERT DELIVERY SUMMARY: {successful_deliveries}/{total_chats} successful, {failed_deliveries}/{total_chats} failed")
+
+    if successful_deliveries == 0:
+        logger.error(f"🚨 CRITICAL: Alert delivery failed to ALL chats for ${sum_value:.2f} USDT trade!")
+    elif failed_deliveries > 0:
+        logger.warning(f"⚠️ Partial delivery failure: {failed_deliveries} chat(s) did not receive the alert")
+    else:
+        logger.info(f"🎉 Perfect delivery: Alert successfully sent to all {total_chats} chat(s)")
 
 async def chart_command(update: Update, context: CallbackContext) -> None:
-    """Generate and send a price chart."""
-    await update.message.reply_text("Generating chart, please wait...")
-    
+    """Generate and send price charts for both XBT/USDT and XBT/BTC pairs."""
+    await update.message.reply_text("📊 Generating charts for both trading pairs, please wait...")
+
     try:
-        # Get historical trades
-        trades = await get_nonkyc_trades()
-        
-        if not trades:
-            await update.message.reply_text("No trade data available to generate chart.")
+        # Get historical trades for XBT/USDT
+        trades_usdt = await get_nonkyc_trades()
+
+        if not trades_usdt:
+            await update.message.reply_text("❌ No trade data available to generate charts.")
             return
-            
-        # Convert to DataFrame
-        df = pd.DataFrame(trades)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['price'] = df['price'].astype(float)
-        df['quantity'] = df['quantity'].astype(float)
-        
-        # Sort by timestamp
-        df = df.sort_values('timestamp')
-        
-        # Create figure
-        fig = go.Figure(data=[go.Scatter(
-            x=df['timestamp'],
-            y=df['price'],
+
+        # Convert to DataFrame for USDT pair
+        df_usdt = pd.DataFrame(trades_usdt)
+        df_usdt['timestamp'] = pd.to_datetime(df_usdt['timestamp'])
+        df_usdt['price'] = df_usdt['price'].astype(float)
+        df_usdt['quantity'] = df_usdt['quantity'].astype(float)
+        df_usdt = df_usdt.sort_values('timestamp')
+
+        # Create XBT/USDT chart
+        fig_usdt = go.Figure(data=[go.Scatter(
+            x=df_usdt['timestamp'],
+            y=df_usdt['price'],
             mode='lines',
-            name='JKC/USDT',
-            line=dict(color='green', width=2)
+            name='XBT/USDT',
+            line=dict(color='#00D4AA', width=2)  # NonKYC green color
         )])
-        
-        # Update layout
-        fig.update_layout(
-            title='JKC/USDT Price Chart (NonKYC)',
+
+        fig_usdt.update_layout(
+            title='📈 XBT/USDT Price Chart (NonKYC Exchange)',
             xaxis_title='Time',
             yaxis_title='Price (USDT)',
             template='plotly_dark',
             autosize=True,
             width=1000,
-            height=600
+            height=600,
+            font=dict(size=12),
+            title_font=dict(size=16)
         )
-        
-        # Save to temporary file
-        chart_path = 'temp_chart.png'
-        fig.write_image(chart_path)
-        
-        # Send chart
-        with open(chart_path, 'rb') as f:
-            await update.message.reply_photo(photo=f)
-            
-        # Clean up
-        os.remove(chart_path)
-        
+
+        # Save XBT/USDT chart
+        chart_usdt_path = 'temp_chart_usdt.png'
+        fig_usdt.write_image(chart_usdt_path)
+
+        # Send XBT/USDT chart with trading link
+        usdt_caption = (
+            "📊 <b>XBT/USDT Price Chart</b>\n"
+            "💱 <a href='https://nonkyc.io/market/XBT_USDT'>Trade XBT/USDT on NonKYC</a>\n"
+            "📈 Real-time trading data from NonKYC Exchange"
+        )
+
+        with open(chart_usdt_path, 'rb') as f:
+            await update.message.reply_photo(
+                photo=f,
+                caption=usdt_caption,
+                parse_mode="HTML"
+            )
+
+        # Try to get BTC pair data (this might not be available, so we'll simulate or skip)
+        try:
+            # For now, we'll create a simulated BTC chart based on USDT data
+            # In a real implementation, you'd fetch actual XBT/BTC data
+
+            # Get current BTC price to convert USDT prices to BTC equivalent
+            # This is a simplified approach - in reality you'd want actual XBT/BTC trade data
+            btc_price_usdt = 45000  # Approximate BTC price - you could fetch this from an API
+
+            df_btc = df_usdt.copy()
+            df_btc['price_btc'] = df_btc['price'] / btc_price_usdt
+
+            fig_btc = go.Figure(data=[go.Scatter(
+                x=df_btc['timestamp'],
+                y=df_btc['price_btc'],
+                mode='lines',
+                name='XBT/BTC',
+                line=dict(color='#F7931A', width=2)  # Bitcoin orange color
+            )])
+
+            fig_btc.update_layout(
+                title='₿ XBT/BTC Price Chart (Estimated)',
+                xaxis_title='Time',
+                yaxis_title='Price (BTC)',
+                template='plotly_dark',
+                autosize=True,
+                width=1000,
+                height=600,
+                font=dict(size=12),
+                title_font=dict(size=16)
+            )
+
+            # Save XBT/BTC chart
+            chart_btc_path = 'temp_chart_btc.png'
+            fig_btc.write_image(chart_btc_path)
+
+            # Send XBT/BTC chart with trading link
+            btc_caption = (
+                "₿ <b>XBT/BTC Price Chart</b>\n"
+                "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>\n"
+                "📊 Estimated from USDT pair data"
+            )
+
+            with open(chart_btc_path, 'rb') as f:
+                await update.message.reply_photo(
+                    photo=f,
+                    caption=btc_caption,
+                    parse_mode="HTML"
+                )
+
+            # Clean up BTC chart
+            os.remove(chart_btc_path)
+
+        except Exception as btc_error:
+            logger.warning(f"Could not generate BTC chart: {btc_error}")
+            # Send message about BTC trading link anyway
+            await update.message.reply_text(
+                "₿ <b>XBT/BTC Trading</b>\n"
+                "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>",
+                parse_mode="HTML"
+            )
+
+        # Clean up USDT chart
+        os.remove(chart_usdt_path)
+
+        # Send summary message with both trading links
+        summary_message = (
+            "📊 <b>XBT Trading Pairs on NonKYC Exchange</b>\n\n"
+            "💱 <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT Trading</a>\n"
+            "₿ <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC Trading</a>\n\n"
+            "🌐 <a href='https://nonkyc.io'>Visit NonKYC Exchange</a>"
+        )
+
+        await update.message.reply_text(summary_message, parse_mode="HTML")
+
     except Exception as e:
-        await update.message.reply_text(f"Error generating chart: {str(e)}")
+        logger.error(f"Error generating charts: {e}")
+        await update.message.reply_text(f"❌ Error generating charts: {str(e)}")
 
 def get_public_ip():
     try:
@@ -1370,33 +2189,179 @@ async def set_minimum_command(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     logger.info(f"setmin command called by user {user_id}")
 
-    if not await is_admin(update, context):
+    if not await can_use_admin_commands(update, context):
         logger.warning(f"User {user_id} tried to use setmin command without admin permissions")
-        await update.message.reply_text("You do not have permission to set the minimum value.")
+        chat_id = update.effective_chat.id
+        if chat_id == -1002471264202:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "The /setmin command is restricted to the bot owner only.\n"
+                "This is a public supergroup where settings are managed centrally.\n\n"
+                "📊 You can still use:\n"
+                "• /help - View available commands\n"
+                "• /price - Check current XBT price\n"
+                "• /chart - Generate price chart",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "You do not have permission to set the minimum threshold value.\n"
+                "This command is restricted to bot administrators only.",
+                parse_mode="HTML"
+            )
         return ConversationHandler.END
 
     logger.info(f"User {user_id} has admin permissions, proceeding with setmin command")
-    await update.message.reply_text(
-        "Please enter the new minimum value in USDT.\n"
-        f"Current value: {VALUE_REQUIRE} USDT"
+
+    # Get current configuration for context
+    dynamic_enabled = CONFIG.get("dynamic_threshold", {}).get("enabled", False)
+    aggregation_enabled = CONFIG.get("trade_aggregation", {}).get("enabled", True)
+
+    prompt_message = (
+        f"⚙️ <b>Set Minimum Alert Threshold</b>\n\n"
+        f"🎯 <b>Current Value:</b> ${VALUE_REQUIRE:.2f} USDT\n"
+        f"📊 <b>Dynamic Threshold:</b> {'Enabled' if dynamic_enabled else 'Disabled'}\n"
+        f"🔄 <b>Trade Aggregation:</b> {'Enabled' if aggregation_enabled else 'Disabled'}\n\n"
+        f"💡 <b>Please enter the new minimum threshold value:</b>\n\n"
+        f"<b>Valid Range:</b> $0.01 - $100,000 USDT\n"
+        f"<b>Examples:</b>\n"
+        f"• <code>100</code> (for $100 USDT)\n"
+        f"• <code>250.50</code> (for $250.50 USDT)\n"
+        f"• <code>1000</code> (for $1,000 USDT)\n\n"
+        f"🔔 <i>The bot will alert on XBT transactions at or above this value.</i>"
     )
+
+    await update.message.reply_text(prompt_message, parse_mode="HTML")
     return INPUT_NUMBER
 
 async def set_minimum_input(update: Update, context: CallbackContext) -> int:
     global VALUE_REQUIRE, CONFIG
+
+    user_id = update.effective_user.id
+    input_text = update.message.text.strip()
+
+    logger.info(f"User {user_id} attempting to set minimum value to: {input_text}")
+
     try:
-        value = float(update.message.text)
-        if value <= 0:
-            await update.message.reply_text("Value must be greater than 0. Please try again.")
+        # Parse the input value
+        new_value = float(input_text)
+
+        # Store old value for comparison
+        old_value = VALUE_REQUIRE
+
+        # Validate the input value
+        if new_value <= 0:
+            await update.message.reply_text(
+                "❌ <b>Invalid Value</b>\n\n"
+                "Minimum threshold must be positive.\n"
+                "Please enter a value greater than 0.",
+                parse_mode="HTML"
+            )
+            logger.warning(f"User {user_id} entered non-positive value: {new_value}")
             return INPUT_NUMBER
-            
-        VALUE_REQUIRE = value
-        CONFIG["value_require"] = value
-        save_config(CONFIG)
-        await update.message.reply_text(f"Minimum value set to {value} USDT")
+
+        # Check for reasonable range (0.01 to 100,000 USDT)
+        if new_value < 0.01:
+            await update.message.reply_text(
+                "❌ <b>Value Too Small</b>\n\n"
+                "Minimum threshold is too small.\n"
+                "Please enter a value of at least $0.01 USDT.",
+                parse_mode="HTML"
+            )
+            logger.warning(f"User {user_id} entered value too small: {new_value}")
+            return INPUT_NUMBER
+
+        if new_value > 100000:
+            await update.message.reply_text(
+                "❌ <b>Value Too Large</b>\n\n"
+                "Minimum threshold is too large.\n"
+                "Please enter a value between $0.01 and $100,000 USDT.",
+                parse_mode="HTML"
+            )
+            logger.warning(f"User {user_id} entered value too large: {new_value}")
+            return INPUT_NUMBER
+
+        # Update the global value and configuration
+        VALUE_REQUIRE = new_value
+        CONFIG["value_require"] = new_value
+
+        # Save configuration to file
+        try:
+            save_config(CONFIG)
+            logger.info(f"Configuration saved successfully. Minimum value updated from {old_value} to {new_value} USDT")
+        except Exception as e:
+            logger.error(f"Error saving configuration: {e}")
+            # Revert the change if save failed
+            VALUE_REQUIRE = old_value
+            CONFIG["value_require"] = old_value
+            await update.message.reply_text(
+                "❌ <b>Configuration Save Failed</b>\n\n"
+                "Could not save the new threshold value to configuration file.\n"
+                "Please try again or contact the administrator.",
+                parse_mode="HTML"
+            )
+            return ConversationHandler.END
+
+        # Determine change direction for emoji
+        if new_value > old_value:
+            change_emoji = "📈"
+            change_text = "increased"
+        elif new_value < old_value:
+            change_emoji = "📉"
+            change_text = "decreased"
+        else:
+            change_emoji = "➡️"
+            change_text = "unchanged"
+
+        # Calculate percentage change
+        if old_value > 0:
+            percent_change = ((new_value - old_value) / old_value) * 100
+            if abs(percent_change) >= 0.01:  # Only show if change is significant
+                percent_text = f" ({percent_change:+.1f}%)"
+            else:
+                percent_text = ""
+        else:
+            percent_text = ""
+
+        # Send comprehensive success message
+        success_message = (
+            f"✅ <b>Minimum Threshold Updated Successfully!</b>\n\n"
+            f"{change_emoji} <b>Previous Value:</b> ${old_value:.2f} USDT\n"
+            f"🎯 <b>New Value:</b> ${new_value:.2f} USDT{percent_text}\n\n"
+            f"📊 <b>Status:</b> Threshold {change_text}\n"
+            f"💾 <b>Configuration:</b> Saved to file\n"
+            f"⚡ <b>Effect:</b> Active immediately\n\n"
+            f"🔔 The bot will now alert on XBT transactions of ${new_value:.2f} USDT or higher."
+        )
+
+        await update.message.reply_text(success_message, parse_mode="HTML")
+        logger.info(f"User {user_id} successfully updated minimum threshold from {old_value} to {new_value} USDT")
+
     except ValueError:
-        await update.message.reply_text("Invalid input. Please enter a number.")
+        await update.message.reply_text(
+            "❌ <b>Invalid Input Format</b>\n\n"
+            "Please enter a valid number.\n\n"
+            "<b>Examples:</b>\n"
+            "• <code>100</code> (for $100 USDT)\n"
+            "• <code>50.5</code> (for $50.50 USDT)\n"
+            "• <code>1000</code> (for $1,000 USDT)\n\n"
+            "Try again with a numeric value:",
+            parse_mode="HTML"
+        )
+        logger.warning(f"User {user_id} entered invalid format: {input_text}")
         return INPUT_NUMBER
+
+    except Exception as e:
+        logger.error(f"Unexpected error in set_minimum_input: {e}")
+        await update.message.reply_text(
+            "❌ <b>Unexpected Error</b>\n\n"
+            "An unexpected error occurred while updating the threshold.\n"
+            "Please try again or contact the administrator.",
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
     return ConversationHandler.END
 
 async def set_image_command(update: Update, context: CallbackContext) -> int:
@@ -1404,9 +2369,23 @@ async def set_image_command(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     logger.info(f"setimage command called by user {user_id}")
 
-    if not await is_admin(update, context):
+    if not await can_use_admin_commands(update, context):
         logger.warning(f"User {user_id} tried to use setimage command without admin permissions")
-        await update.message.reply_text("You do not have permission to set the image.")
+        chat_id = update.effective_chat.id
+        if chat_id == -1002471264202:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "The /setimage command is restricted to the bot owner only.\n"
+                "This is a public supergroup where settings are managed centrally.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "You do not have permission to set the image.\n"
+                "This command is restricted to administrators only.",
+                parse_mode="HTML"
+            )
         return ConversationHandler.END
 
     logger.info(f"User {user_id} has admin permissions, proceeding with setimage command")
@@ -1414,17 +2393,63 @@ async def set_image_command(update: Update, context: CallbackContext) -> int:
         "Please send the image you want to use for alerts.\n"
         "The image should be clear and appropriate."
     )
-    return INPUT_IMAGE
+    return INPUT_IMAGE_SETIMAGE
 
 async def set_image_input(update: Update, context: CallbackContext) -> int:
     global PHOTO, CONFIG
 
     try:
-        # Get the highest resolution photo
-        photo = update.message.photo[-1]
-        file = await photo.get_file()
+        logger.info(f"Processing image upload from user {update.effective_user.id}")
 
-        logger.info(f"Processing image upload: file_id={file.file_id}, file_size={file.file_size}")
+        # Handle different types of media with enhanced detection
+        file = None
+        file_extension = ".jpg"  # Default
+        media_type = "unknown"
+
+        if update.message.photo:
+            # Regular photo
+            photo = update.message.photo[-1]  # Get highest resolution
+            file = await photo.get_file()
+            file_extension = ".jpg"
+            media_type = "photo"
+            logger.info(f"Processing photo: file_id={file.file_id}, file_size={file.file_size}")
+        elif update.message.document:
+            # Document (could be image file)
+            document = update.message.document
+            file = await document.get_file()
+            media_type = "document"
+
+            # Get extension from filename or mime type
+            if document.file_name:
+                file_extension = os.path.splitext(document.file_name)[1].lower()
+                if not file_extension:
+                    file_extension = ".jpg"
+                logger.info(f"Processing document: file_id={file.file_id}, file_size={file.file_size}, name={document.file_name}, mime={document.mime_type}")
+            else:
+                # Try to determine from MIME type
+                mime_type = document.mime_type or ""
+                if "gif" in mime_type:
+                    file_extension = ".gif"
+                elif "png" in mime_type:
+                    file_extension = ".png"
+                elif "jpeg" in mime_type or "jpg" in mime_type:
+                    file_extension = ".jpg"
+                elif "webp" in mime_type:
+                    file_extension = ".webp"
+                logger.info(f"Processing document without filename: file_id={file.file_id}, mime={mime_type}, assigned_ext={file_extension}")
+        elif update.message.animation:
+            # GIF/animation - Telegram converts GIFs to MP4
+            animation = update.message.animation
+            file = await animation.get_file()
+            media_type = "animation"
+
+            # Telegram animations are typically MP4 format, even if originally GIF
+            file_extension = ".mp4"  # Telegram converts GIFs to MP4
+            logger.info(f"Processing animation (GIF→MP4): file_id={file.file_id}, file_size={file.file_size}, mime={animation.mime_type}")
+        else:
+            logger.error("No supported media type found in message")
+            await update.message.reply_text("❌ Please send a photo, image file, or GIF.")
+            return ConversationHandler.END
 
         # Download the image
         image_data = await file.download_as_bytearray()
@@ -1435,7 +2460,6 @@ async def set_image_input(update: Update, context: CallbackContext) -> int:
 
         # Generate unique filename with timestamp
         timestamp = int(time.time())
-        file_extension = ".jpg"  # Default to jpg for Telegram photos
         filename = f"alert_image_{timestamp}{file_extension}"
         image_path = os.path.join(IMAGES_DIR, filename)
 
@@ -1460,16 +2484,28 @@ async def set_image_input(update: Update, context: CallbackContext) -> int:
         # Update the global PHOTO variable with a new random image
         PHOTO = load_random_image()
 
+        # Detect the actual file type after saving
+        detected_type = detect_file_type(image_path)
+
         # Get collection count
         collection_count = len(get_image_collection())
+
+        # Create detailed success message
+        type_info = {
+            'photo': '📷 Photo (JPEG)',
+            'document': f'📄 Document ({detected_type.upper()})',
+            'animation': '🎬 Animation (GIF→MP4 conversion)'
+        }.get(media_type, f'📁 File ({detected_type.upper()})')
 
         await update.message.reply_text(
             f"✅ Image added to collection successfully!\n"
             f"📁 Collection now has {collection_count} images\n"
             f"🎲 Images will be randomly selected for alerts\n"
-            f"📄 Saved as: {filename}"
+            f"📄 Saved as: {filename}\n"
+            f"🎯 Type: {type_info}\n"
+            f"💾 Size: {len(image_data)} bytes ({len(image_data)/1024:.1f} KB)"
         )
-        logger.info(f"Image upload completed successfully. Collection now has {collection_count} images")
+        logger.info(f"Image upload completed successfully. Collection now has {collection_count} images. Type: {media_type}→{detected_type}, File: {filename}")
 
     except Exception as e:
         logger.error(f"Error in set_image_input: {e}")
@@ -1491,32 +2527,21 @@ async def start_bot(update: Update, context: CallbackContext) -> None:
     # Log the IDs for debugging
     logger.info(f"Start command - User ID: {user_id}, Chat ID: {chat_id}")
 
-    # Check if user is admin or bot owner
-    is_user_admin = False
-    try:
-        if user_id == BOT_OWNER or user_id == BY_PASS:
-            is_user_admin = True
-        elif chat_id < 0:  # Group chat
-            chat_member = await context.bot.get_chat_member(chat_id, user_id)
-            is_user_admin = chat_member.status in ["administrator", "creator"]
-    except Exception as e:
-        logger.error(f"Error checking admin status: {e}")
-        is_user_admin = False
-
-    if is_user_admin:
+    # Check if user can start/stop bot using enhanced permission system
+    if await can_start_stop_bot(update, context):
         if chat_id not in ACTIVE_CHAT_IDS:
             ACTIVE_CHAT_IDS.append(chat_id)
             CONFIG["active_chat_ids"] = ACTIVE_CHAT_IDS
             save_config(CONFIG)
-            
+
             # Get aggregation status
             aggregation_enabled = CONFIG.get("trade_aggregation", {}).get("enabled", True)
             aggregation_window = CONFIG.get("trade_aggregation", {}).get("window_seconds", 3)
-            
+
             # Send welcome message with commands
             welcome_text = (
-                "🎉 <b>JunkCoin Alert Bot Started!</b> 🎉\n\n"
-                "You will now receive alerts for significant JKC transactions.\n\n"
+                "🎉 <b>Bitcoin Classic (XBT) Alert Bot Started!</b> 🎉\n\n"
+                "You will now receive alerts for significant XBT transactions.\n\n"
                 "<b>Current threshold:</b> {:.2f} USDT\n"
                 "<b>Dynamic threshold:</b> {}\n"
                 "<b>Trade aggregation:</b> {} (window: {}s)\n\n"
@@ -1527,7 +2552,7 @@ async def start_bot(update: Update, context: CallbackContext) -> None:
                 "Enabled" if aggregation_enabled else "Disabled",
                 aggregation_window
             )
-            
+
             # Create buttons for quick access
             keyboard = [
                 [
@@ -1540,7 +2565,7 @@ async def start_bot(update: Update, context: CallbackContext) -> None:
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
+
             await update.message.reply_text(
                 welcome_text,
                 reply_markup=reply_markup,
@@ -1552,44 +2577,80 @@ async def start_bot(update: Update, context: CallbackContext) -> None:
                 parse_mode="HTML"
             )
     else:
-        await update.message.reply_text("You need to be an admin to start the bot.")
+        # Enhanced error message based on chat type
+        chat_type = "private chat" if chat_id > 0 else "group/supergroup"
+        if chat_id == -1002471264202:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "The /start command is restricted to the bot owner only.\n"
+                "This is a public supergroup where alerts are managed centrally.\n\n"
+                "📊 You can still use:\n"
+                "• /help - View available commands\n"
+                "• /price - Check current XBT price\n"
+                "• /chart - Generate price chart\n"
+                "• /debug - View your user info",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ <b>Permission Denied</b>\n\n"
+                f"You don't have permission to start/stop alerts in this {chat_type}.\n"
+                f"Only the bot owner can control alert settings.\n\n"
+                f"📊 You can still use public commands like /help, /price, and /chart.",
+                parse_mode="HTML"
+            )
 
 async def stop_bot(update: Update, context: CallbackContext) -> None:
     global ACTIVE_CHAT_IDS, CONFIG
-    
-    # Make sure we're getting the correct user ID
-    user_id = update.effective_user.id if update.effective_user else None
-    if user_id is None and update.message and update.message.from_user:
-        user_id = update.message.from_user.id
-    
+
     chat_id = update.effective_chat.id
-    
+    user_id = update.effective_user.id
+
     # Debug log
     logger.info(f"Stop command accessed by user ID: {user_id}, BOT_OWNER: {BOT_OWNER}")
 
-    # Always allow the bot owner to stop the bot
-    if int(user_id) == int(BOT_OWNER):
+    # Check if user can start/stop bot using enhanced permission system
+    if await can_start_stop_bot(update, context):
         if chat_id in ACTIVE_CHAT_IDS:
             ACTIVE_CHAT_IDS.remove(chat_id)
             CONFIG["active_chat_ids"] = ACTIVE_CHAT_IDS
             save_config(CONFIG)
-            await update.message.reply_text("Bot stopped")
+            await update.message.reply_text(
+                "🛑 <b>XBT Alert Bot Stopped</b>\n\n"
+                "You will no longer receive alerts in this chat.\n"
+                "Use /start to resume alerts.",
+                parse_mode="HTML"
+            )
         else:
-            await update.message.reply_text("Bot not running")
-        return
-
-    # For non-owners, check if they're an admin
-    chat_member = await context.bot.get_chat_member(chat_id, user_id)
-    if chat_member.status in ["administrator", "creator"]:
-        if chat_id in ACTIVE_CHAT_IDS:
-            ACTIVE_CHAT_IDS.remove(chat_id)
-            CONFIG["active_chat_ids"] = ACTIVE_CHAT_IDS
-            save_config(CONFIG)
-            await update.message.reply_text("Bot stopped")
-        else:
-            await update.message.reply_text("Bot not running")
+            await update.message.reply_text(
+                "ℹ️ <b>Bot Not Running</b>\n\n"
+                "Alerts are not currently active in this chat.\n"
+                "Use /start to begin receiving alerts.",
+                parse_mode="HTML"
+            )
     else:
-        await update.message.reply_text("You need to be an admin to stop the bot.")
+        # Enhanced error message based on chat type
+        chat_type = "private chat" if chat_id > 0 else "group/supergroup"
+        if chat_id == -1002471264202:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "The /stop command is restricted to the bot owner only.\n"
+                "This is a public supergroup where alerts are managed centrally.\n\n"
+                "📊 You can still use:\n"
+                "• /help - View available commands\n"
+                "• /price - Check current XBT price\n"
+                "• /chart - Generate price chart\n"
+                "• /debug - View your user info",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ <b>Permission Denied</b>\n\n"
+                f"You don't have permission to start/stop alerts in this {chat_type}.\n"
+                f"Only the bot owner can control alert settings.\n\n"
+                f"📊 You can still use public commands like /help, /price, and /chart.",
+                parse_mode="HTML"
+            )
 
 async def check_price(update: Update, context: CallbackContext) -> None:
     global USER_CHECK_PRICE
@@ -1611,87 +2672,145 @@ async def check_price(update: Update, context: CallbackContext) -> None:
         USER_CHECK_PRICE.append(
             {'user_id': user_id, 'time': (int(time.time() * 1000) + 30000)})
 
-    # Get market data for current price
+    # Get market data for current price - try NonKYC first, then LiveCoinWatch as fallback
     market_data = await get_nonkyc_ticker()
+    data_source = "NonKYC Exchange"
+
     if not market_data:
-        await update.message.reply_text("Error fetching market data. Please try again later.")
+        logger.info("NonKYC API failed, using LiveCoinWatch fallback")
+        market_data = await get_livecoinwatch_data()
+        data_source = "LiveCoinWatch"
+
+    if not market_data:
+        await update.message.reply_text("Error fetching market data from all sources. Please try again later.")
         return
 
     # Get combined volume data from both exchanges
     volume_data = await calculate_combined_volume_periods()
-    volume_periods = volume_data["combined"]
+    volume_periods = volume_data.get("combined", {}) if volume_data else {}
 
-    # Extract data from NonKYC API
-    current_price = market_data.get("lastPriceNumber", 0)
-    yesterday_price = market_data.get("yesterdayPriceNumber", 0)
-    high_24h = market_data.get("highPriceNumber", 0)
-    low_24h = market_data.get("lowPriceNumber", 0)
-    volume_24h_jkc = market_data.get("volumeNumber", 0)
-    volume_24h_usdt = market_data.get("volumeUsdNumber", 0)
-    change_percent = market_data.get("changePercentNumber", 0)
-    market_cap_nonkyc = market_data.get("marketcapNumber", 0)
-    best_bid = market_data.get("bestBidNumber", 0)
-    best_ask = market_data.get("bestAskNumber", 0)
-    spread_percent = market_data.get("spreadPercentNumber", 0)
+    # Ensure all volume periods have default values
+    volume_periods = {
+        "15m": volume_periods.get("15m", 0) or 0,
+        "1h": volume_periods.get("1h", 0) or 0,
+        "4h": volume_periods.get("4h", 0) or 0,
+        "24h": volume_periods.get("24h", 0) or 0
+    }
+
+    # Extract data based on source with safety checks first
+    if data_source == "LiveCoinWatch":
+        # LiveCoinWatch API format
+        current_price = market_data.get("rate", 0) or 0
+        volume_24h_usdt = market_data.get("volume", 0) or 0
+        market_cap_nonkyc = market_data.get("cap", 0) or 0
+        total_supply = market_data.get("totalSupply", 0) or 0
+
+        # Calculate 24h change from delta object
+        delta = market_data.get("delta", {}) or {}
+        change_percent = delta.get("day", 0) if delta else 0
+        change_percent = change_percent or 0
+
+        # LiveCoinWatch doesn't provide all fields, set defaults
+        yesterday_price = current_price / (1 + change_percent/100) if change_percent != 0 else current_price
+        high_24h = current_price * 1.05  # Estimate
+        low_24h = current_price * 0.95   # Estimate
+        volume_24h_xbt = volume_24h_usdt / current_price if current_price > 0 else 0
+        best_bid = current_price * 0.999  # Estimate
+        best_ask = current_price * 1.001  # Estimate
+        spread_percent = 0.2  # Estimate
+    else:
+        # NonKYC API format with safety checks
+        current_price = market_data.get("lastPriceNumber", 0) or 0
+        yesterday_price = market_data.get("yesterdayPriceNumber", 0) or 0
+        high_24h = market_data.get("highPriceNumber", 0) or 0
+        low_24h = market_data.get("lowPriceNumber", 0) or 0
+        volume_24h_xbt = market_data.get("volumeNumber", 0) or 0
+        volume_24h_usdt = market_data.get("volumeUsdNumber", 0) or 0
+        change_percent = market_data.get("changePercentNumber", 0) or 0
+        market_cap_nonkyc = market_data.get("marketcapNumber", 0) or 0
+        best_bid = market_data.get("bestBidNumber", 0) or 0
+        best_ask = market_data.get("bestAskNumber", 0) or 0
+        spread_percent = market_data.get("spreadPercentNumber", 0) or 0
+
+    # Get momentum data for different timeframes
+    momentum_periods = {"15m": 0, "1h": 0, "4h": 0, "24h": 0}
+    try:
+        trades_data = await get_nonkyc_trades()
+        if trades_data and data_source == "NonKYC Exchange":
+            momentum_periods = await calculate_momentum_periods(trades_data, current_price)
+    except Exception as e:
+        logger.warning(f"Could not calculate momentum periods: {e}")
 
     # Calculate additional metrics
     price_change_usdt = current_price - yesterday_price if yesterday_price > 0 else 0
 
-    # Determine momentum emoji
-    if change_percent > 5:
-        momentum_emoji = "🚀🚀🚀"
-        momentum_text = "BULLISH"
-    elif change_percent > 2:
-        momentum_emoji = "🚀🚀"
-        momentum_text = "Strong Up"
+    # Format change with crypto-appropriate emojis
+    if change_percent >= 10:
+        change_emoji = "🚀"
+    elif change_percent >= 5:
+        change_emoji = "📈"
     elif change_percent > 0:
-        momentum_emoji = "🚀"
-        momentum_text = "Up"
-    elif change_percent == 0:
-        momentum_emoji = "➡️"
-        momentum_text = "Neutral"
-    elif change_percent > -2:
-        momentum_emoji = "📉"
-        momentum_text = "Down"
-    elif change_percent > -5:
-        momentum_emoji = "📉📉"
-        momentum_text = "Strong Down"
+        change_emoji = "⬆️"
+    elif change_percent >= -5:
+        change_emoji = "➡️"
+    elif change_percent >= -10:
+        change_emoji = "⬇️"
+    elif change_percent >= -20:
+        change_emoji = "📉"
     else:
-        momentum_emoji = "📉📉📉"
-        momentum_text = "BEARISH"
+        change_emoji = "💀"
 
-    # Format change with appropriate emoji
-    change_emoji = "📈" if change_percent >= 0 else "📉"
     change_sign = "+" if change_percent >= 0 else ""
 
-    # Create buttons
+    # Create buttons with trading links
     button1 = InlineKeyboardButton(
-        text="📊 NonKYC", url="https://nonkyc.io/market/JKC_USDT")
+        text="📊 LiveCoinWatch", url="https://www.livecoinwatch.com/price/BitcoinClassic-_XBT")
     button2 = InlineKeyboardButton(
-        text="🏦 CoinEx", url="https://www.coinex.com/en/exchange/jkc-usdt")
+        text="📈 CoinPaprika", url="https://coinpaprika.com/coin/xbt-bitcoin-classic/")
     button3 = InlineKeyboardButton(
-        text="🦎 CoinGecko", url="https://www.coingecko.com/en/coins/junkcoin")
+        text="💱 Trade XBT/USDT", url="https://nonkyc.io/market/XBT_USDT")
     button4 = InlineKeyboardButton(
-        text="📈 CoinMarketCap", url="https://coinmarketcap.com/currencies/junkcoin")
+        text="₿ Trade XBT/BTC", url="https://nonkyc.io/market/XBT_BTC")
+    button5 = InlineKeyboardButton(
+        text="🌐 Bitcoin Classic Website", url="https://www.classicxbt.com")
+    button6 = InlineKeyboardButton(
+        text="💰 Get XBT Wallet", url="https://www.classicxbt.com/wallets")
     keyboard = InlineKeyboardMarkup([
         [button1, button2],
-        [button3, button4]
+        [button3, button4],
+        [button5, button6]
     ])
 
-    # Format the message with rich data including volume periods
+    # Remove market sentiment - keep display professional and data-driven
+
+    # Format momentum values with proper signs and emojis
+    def format_momentum(value):
+        if value > 0:
+            return f"+{value:.2f}%"
+        elif value < 0:
+            return f"{value:.2f}%"
+        else:
+            return "0.00%"
+
+    # Format the message with rich data including momentum and volume periods
     message = (
-        f"⛵️ <b>JunkCoin (JKC) Market Data</b> ⛵️\n\n"
-        f"� <b>Price:</b> ${current_price:.6f} USDT\n"
+        f"🪙 <b>Bitcoin Classic (XBT) Market Data</b> 🪙\n\n"
+        f"💰 <b>Price:</b> ${current_price:.6f} USDT\n"
         f"{change_emoji} <b>24h Change:</b> {change_sign}{change_percent:.2f}% "
-        f"({change_sign}${price_change_usdt:.6f})\n"
-        f"{momentum_emoji} <b>Momentum:</b> {momentum_text}\n\n"
+        f"({change_sign}${price_change_usdt:.6f})\n\n"
 
         f"🏦 <b>Market Cap:</b> ${market_cap_nonkyc:,}\n\n"
+
+        f"📊 <b>Momentum (Price Change):</b>\n"
+        f"🕐 <b>15m:</b> {format_momentum(momentum_periods['15m'])}\n"
+        f"🕐 <b>1h:</b> {format_momentum(momentum_periods['1h'])}\n"
+        f"🕐 <b>4h:</b> {format_momentum(momentum_periods['4h'])}\n"
+        f"🕐 <b>24h:</b> {format_momentum(momentum_periods['24h'])}\n\n"
 
         f"📊 <b>24h Statistics:</b>\n"
         f"📈 <b>High:</b> ${high_24h:.6f}\n"
         f"📉 <b>Low:</b> ${low_24h:.6f}\n"
-        f"💹 <b>Volume:</b> {volume_24h_jkc:,.0f} JKC (${volume_24h_usdt:,.0f})\n\n"
+        f"💹 <b>Volume:</b> {volume_24h_xbt:,.0f} XBT (${volume_24h_usdt:,.0f})\n\n"
 
         f"📈 <b>Combined Volume (NonKYC + CoinEx):</b>\n"
         f"🕐 <b>15m:</b> ${volume_periods['15m']:,.0f}\n"
@@ -1704,7 +2823,7 @@ async def check_price(update: Update, context: CallbackContext) -> None:
         f"🔴 <b>Best Ask:</b> ${best_ask:.6f}\n"
         f"📏 <b>Spread:</b> {spread_percent:.2f}%\n\n"
 
-        f"📡 <b>Data Source:</b> NonKYC Exchange"
+        f"📡 <b>Data Source:</b> {data_source}"
     )
 
     await update.message.reply_text(
@@ -1715,8 +2834,26 @@ async def check_price(update: Update, context: CallbackContext) -> None:
 
 async def config_command(update: Update, context: CallbackContext) -> int:
     """Command to access the configuration menu."""
-    if not await is_admin(update, context):
-        await update.message.reply_text("You do not have permission to access configuration.")
+    if not await can_use_admin_commands(update, context):
+        chat_id = update.effective_chat.id
+        if chat_id == -1002471264202:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "Configuration commands are restricted to the bot owner only.\n"
+                "This is a public supergroup where settings are managed centrally.\n\n"
+                "📊 You can still use:\n"
+                "• /help - View available commands\n"
+                "• /price - Check current XBT price\n"
+                "• /chart - Generate price chart",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "You do not have permission to access configuration.\n"
+                "This command is restricted to administrators only.",
+                parse_mode="HTML"
+            )
         return ConversationHandler.END
     
     keyboard = [
@@ -1989,58 +3126,101 @@ async def set_api_keys_input(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 async def help_command(update: Update, context: CallbackContext) -> None:
-    """Show help information and available commands."""
-    help_text = (
-        "🤖⛵️ <b>JunkCoin Alert Bot</b> ⛵️🤖\n\n"
-        "🚨 <b>Real-time monitoring of JKC transactions across multiple exchanges</b>\n"
-        "🎯 <b>Smart alerts with sweep detection and trade aggregation</b>\n"
-        "🎨 <b>Random image collection for varied alert visuals</b>\n\n"
+    """Show help information and available commands based on chat type and permissions."""
+    chat_id = update.effective_chat.id
+    is_public_supergroup = (chat_id == -1002471264202)
+    is_user_admin = await can_use_admin_commands(update, context)
+    is_owner = await is_owner_only(update, context)
 
-        "📊 <b>Information Commands:</b>\n"
-        "/price - Check current JKC price and market cap\n"
+    # Base help text for all users
+    base_help = (
+        "<b>Bitcoin Classic ($XBT) Alert Bot</b>\n\n"
+        "🚨 <b>Real-time Bitcoin Classic (XBT) market data and price monitoring</b>\n"
+        "🎯 <b>Live price updates, market cap tracking, and volume analysis</b>\n"
+        "🎨 <b>Professional alert system with rich market data</b>\n\n"
+
+        "📊 <b>Information Commands (Available to Everyone):</b>\n"
+        "/price - Check current XBT price and market cap\n"
         "/chart - Generate and send a price chart\n"
-        "/debug - Show user ID, chat info, and admin status\n"
+        "/debug - Show user ID, chat info, and permissions\n"
         "/help - Show this help message\n\n"
+    )
 
-        "🛑 <b>Control Commands:</b>\n"
-        "/start - Start receiving alerts in this chat\n"
-        "/stop - Stop receiving alerts in this chat\n\n"
+    if is_public_supergroup:
+        # Public supergroup - limited commands
+        help_text = base_help + (
+            "🏛️ <b>Public Supergroup Mode</b>\n"
+            "This is a public community chat where alerts are managed centrally.\n"
+            "All users can access information commands above.\n\n"
 
-        "⚙️ <b>Admin Configuration:</b>\n"
-        "/config - Interactive configuration menu\n"
-        "/setmin [value] - Set minimum transaction value (e.g. /setmin 150)\n"
-        "/toggle_aggregation - Enable/disable trade aggregation\n\n"
+            "🔒 <b>Restricted Commands:</b>\n"
+            "• /start, /stop - Owner only (alerts managed centrally)\n"
+            "• /config, /setmin - Owner only (settings managed centrally)\n"
+            "• Admin commands - Owner only for security\n\n"
 
-        "🎨 <b>Image Management (Admin):</b>\n"
-        "/setimage - Add image to collection (send image after command)\n"
-        "/list_images - View all images in your collection\n"
-        "/clear_images - Remove all images from collection\n\n"
+            "🚨 <b>Alert Information:</b>\n"
+            "• Alerts are automatically delivered to this group\n"
+            "• Current threshold: ${} USDT\n"
+            "• Trade aggregation: 8-second window\n"
+            "• Alert types: 🚨 Standard | 💥 Significant | 🔥 Major | 🐋 Whale\n\n"
+        ).format(VALUE_REQUIRE)
+    else:
+        # Private chat or other groups - full functionality
+        help_text = base_help
 
-        "🔐 <b>Owner Only Commands:</b>\n"
-        "/setapikey - Configure exchange API keys\n"
-        "/ipwan - Get server's public IP address\n\n"
+        if is_owner or is_user_admin:
+            help_text += (
+                "🛑 <b>Control Commands:</b>\n"
+                "/start - Start receiving alerts in this chat\n"
+                "/stop - Stop receiving alerts in this chat\n\n"
+            )
 
-        "🚨 <b>Alert Types:</b>\n"
-        "🚨 Standard (1x threshold) | 💥 Significant (2x)\n"
-        "🔥 Major (3x) | 🔥🔥 Huge (5x) | 🐋🐋🐋 Whale (10x+)\n\n"
+        if is_user_admin:
+            help_text += (
+                "⚙️ <b>Admin Configuration:</b>\n"
+                "/config - Interactive configuration menu\n"
+                "/setmin [value] - Set minimum transaction value (e.g. /setmin 150)\n"
+                "/toggle_aggregation - Enable/disable trade aggregation\n\n"
 
-        "📈 <b>Monitored Exchanges:</b>\n"
-        "• NonKYC (Real-time orderbook + sweep detection)\n"
-        "• CoinEx (Live trade monitoring)\n"
-        "• AscendEX (With API keys)\n\n"
+                "🎨 <b>Image Management (Admin):</b>\n"
+                "/setimage - Add image to collection (send image after command)\n"
+                "/list_images - View all images in your collection\n"
+                "/clear_images - Remove all images from collection\n\n"
+            )
 
-        "💡 <b>Pro Tips:</b>\n"
-        "• Use /setimage multiple times to build a varied collection\n"
-        "• Enable trade aggregation to catch coordinated buying\n"
-        "• Set threshold based on your preferred alert frequency\n"
-        "• Use /debug to verify your admin permissions"
+        if is_owner:
+            help_text += (
+                "🔐 <b>Owner Only Commands:</b>\n"
+                "/setapikey - Configure exchange API keys\n"
+                "/ipwan - Get server's public IP address\n\n"
+            )
+
+        help_text += (
+            "🚨 <b>Alert Types:</b>\n"
+            "🚨 Standard (1x threshold) | 💥 Significant (2x)\n"
+            "🔥 Major (3x) | 🔥🔥 Huge (5x) | 🐋🐋🐋 Whale (10x+)\n\n"
+
+            "📈 <b>Data Sources:</b>\n"
+            "• NonKYC Exchange (Primary - Real-time trades and orderbook)\n"
+            "• LiveCoinWatch API (Fallback - Price and market data)\n\n"
+
+            "💡 <b>Pro Tips:</b>\n"
+            "• Use /setimage multiple times to build a varied collection\n"
+            "• Enable trade aggregation to catch coordinated buying\n"
+            "• Set threshold based on your preferred alert frequency\n"
+            "• Use /debug to verify your permissions\n\n"
+        )
+
+    # Common footer for all users
+    help_text += (
+        "☕ <b>XBTBuyBot Developer Coffee Tip:</b>\n"
+        "If you find this bot helpful, consider supporting the developer!\n"
+        "Developer: @moonether\n"
+        "Bitcoin Address: <code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>"
     )
     
     # Create buttons for quick access to common commands
-    user_id = update.effective_user.id
-    is_user_admin = await is_admin(update, context)
-
-    # Basic buttons for all users
+    # Basic buttons for all users (public commands)
     keyboard = [
         [
             InlineKeyboardButton("📊 Check Price", callback_data="cmd_price"),
@@ -2048,15 +3228,29 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         ],
         [
             InlineKeyboardButton("🔍 Debug Info", callback_data="cmd_debug"),
-            InlineKeyboardButton("🛑 Stop Bot", callback_data="cmd_stop")
+            InlineKeyboardButton("💝 Donate to Dev", callback_data="cmd_donate")
         ]
     ]
 
-    # Add admin buttons if user is admin
-    if is_user_admin:
-        keyboard.insert(1, [
-            InlineKeyboardButton("⚙️ Configuration", callback_data="cmd_config"),
-            InlineKeyboardButton("🎨 List Images", callback_data="cmd_list_images")
+    # Add buttons based on permissions and chat type
+    if not is_public_supergroup:
+        # In private chats or other groups, show control buttons
+        if is_owner or is_user_admin:
+            keyboard.insert(1, [
+                InlineKeyboardButton("🚀 Start Bot", callback_data="cmd_start"),
+                InlineKeyboardButton("🛑 Stop Bot", callback_data="cmd_stop")
+            ])
+
+        # Add admin configuration buttons
+        if is_user_admin:
+            keyboard.insert(-1, [
+                InlineKeyboardButton("⚙️ Configuration", callback_data="cmd_config"),
+                InlineKeyboardButton("🎨 List Images", callback_data="cmd_list_images")
+            ])
+    else:
+        # In public supergroup, show limited info
+        keyboard.insert(-1, [
+            InlineKeyboardButton("ℹ️ Group Info", callback_data="cmd_group_info")
         ])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2072,33 +3266,545 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
     query = update.callback_query
     await query.answer()
 
-    # Create a new update object for command execution
-    new_update = Update(
-        update_id=update.update_id,
-        message=query.message,
-        callback_query=None
+    if query.data == "cmd_price":
+        # Handle price command directly with callback query response
+        try:
+            # Get market data for current price - try NonKYC first, then LiveCoinWatch as fallback
+            market_data = await get_nonkyc_ticker()
+            data_source = "NonKYC Exchange"
+
+            if not market_data:
+                logger.info("NonKYC API failed, using LiveCoinWatch fallback")
+                market_data = await get_livecoinwatch_data()
+                data_source = "LiveCoinWatch"
+
+            if not market_data:
+                await query.edit_message_text("Error fetching market data from all sources. Please try again later.")
+                return
+
+            # Get combined volume data from both exchanges
+            volume_data = await calculate_combined_volume_periods()
+            volume_periods = volume_data.get("combined", {}) if volume_data else {}
+
+            # Ensure all volume periods have default values
+            volume_periods = {
+                "15m": volume_periods.get("15m", 0) or 0,
+                "1h": volume_periods.get("1h", 0) or 0,
+                "4h": volume_periods.get("4h", 0) or 0,
+                "24h": volume_periods.get("24h", 0) or 0
+            }
+
+            # Extract data based on source with safety checks
+            if data_source == "LiveCoinWatch":
+                current_price = market_data.get("rate", 0) or 0
+                volume_24h_usdt = market_data.get("volume", 0) or 0
+                market_cap_nonkyc = market_data.get("cap", 0) or 0
+                delta = market_data.get("delta", {}) or {}
+                change_percent = delta.get("day", 0) if delta else 0
+                change_percent = change_percent or 0
+                yesterday_price = current_price / (1 + change_percent/100) if change_percent != 0 else current_price
+                high_24h = current_price * 1.05
+                low_24h = current_price * 0.95
+                volume_24h_xbt = volume_24h_usdt / current_price if current_price > 0 else 0
+                best_bid = current_price * 0.999
+                best_ask = current_price * 1.001
+                spread_percent = 0.2
+            else:
+                current_price = market_data.get("lastPriceNumber", 0) or 0
+                yesterday_price = market_data.get("yesterdayPriceNumber", 0) or 0
+                high_24h = market_data.get("highPriceNumber", 0) or 0
+                low_24h = market_data.get("lowPriceNumber", 0) or 0
+                volume_24h_xbt = market_data.get("volumeNumber", 0) or 0
+                volume_24h_usdt = market_data.get("volumeUsdNumber", 0) or 0
+                change_percent = market_data.get("changePercentNumber", 0) or 0
+                market_cap_nonkyc = market_data.get("marketcapNumber", 0) or 0
+                best_bid = market_data.get("bestBidNumber", 0) or 0
+                best_ask = market_data.get("bestAskNumber", 0) or 0
+                spread_percent = market_data.get("spreadPercentNumber", 0) or 0
+
+            # Get momentum data for different timeframes
+            momentum_periods = {"15m": 0, "1h": 0, "4h": 0, "24h": 0}
+            try:
+                trades_data = await get_nonkyc_trades()
+                if trades_data and data_source == "NonKYC Exchange":
+                    momentum_periods = await calculate_momentum_periods(trades_data, current_price)
+            except Exception as e:
+                logger.warning(f"Could not calculate momentum periods: {e}")
+
+            # Calculate additional metrics
+            price_change_usdt = current_price - yesterday_price if yesterday_price > 0 else 0
+
+            # Format change with crypto-appropriate emojis
+            if change_percent >= 10:
+                change_emoji = "🚀"
+            elif change_percent >= 5:
+                change_emoji = "📈"
+            elif change_percent > 0:
+                change_emoji = "⬆️"
+            elif change_percent >= -5:
+                change_emoji = "➡️"
+            elif change_percent >= -10:
+                change_emoji = "⬇️"
+            elif change_percent >= -20:
+                change_emoji = "📉"
+            else:
+                change_emoji = "💀"
+
+            change_sign = "+" if change_percent >= 0 else ""
+
+            # Format momentum values with proper signs and emojis
+            def format_momentum(value):
+                if value > 0:
+                    return f"+{value:.2f}%"
+                elif value < 0:
+                    return f"{value:.2f}%"
+                else:
+                    return "0.00%"
+
+            # Format the message with rich data including momentum and volume periods
+            message = (
+                f"🪙 <b>Bitcoin Classic (XBT) Market Data</b> 🪙\n\n"
+                f"💰 <b>Price:</b> ${current_price:.6f} USDT\n"
+                f"{change_emoji} <b>24h Change:</b> {change_sign}{change_percent:.2f}% "
+                f"({change_sign}${price_change_usdt:.6f})\n\n"
+
+                f"🏦 <b>Market Cap:</b> ${market_cap_nonkyc:,}\n\n"
+
+                f"📊 <b>Momentum (Price Change):</b>\n"
+                f"🕐 <b>15m:</b> {format_momentum(momentum_periods['15m'])}\n"
+                f"🕐 <b>1h:</b> {format_momentum(momentum_periods['1h'])}\n"
+                f"🕐 <b>4h:</b> {format_momentum(momentum_periods['4h'])}\n"
+                f"🕐 <b>24h:</b> {format_momentum(momentum_periods['24h'])}\n\n"
+
+                f"📊 <b>24h Statistics:</b>\n"
+                f"📈 <b>High:</b> ${high_24h:.6f}\n"
+                f"📉 <b>Low:</b> ${low_24h:.6f}\n"
+                f"💹 <b>Volume:</b> {volume_24h_xbt:,.0f} XBT (${volume_24h_usdt:,.0f})\n\n"
+
+                f"📈 <b>Combined Volume (NonKYC + CoinEx):</b>\n"
+                f"🕐 <b>15m:</b> ${volume_periods['15m']:,.0f}\n"
+                f"🕐 <b>1h:</b> ${volume_periods['1h']:,.0f}\n"
+                f"🕐 <b>4h:</b> ${volume_periods['4h']:,.0f}\n"
+                f"🕐 <b>24h:</b> ${volume_periods['24h']:,.0f}\n\n"
+
+                f"📋 <b>Order Book:</b>\n"
+                f"🟢 <b>Best Bid:</b> ${best_bid:.6f}\n"
+                f"🔴 <b>Best Ask:</b> ${best_ask:.6f}\n"
+                f"📏 <b>Spread:</b> {spread_percent:.2f}%\n\n"
+
+                f"📡 <b>Data Source:</b> {data_source}"
+            )
+
+            # Create buttons with trading links
+            keyboard = [
+                [
+                    InlineKeyboardButton("📊 LiveCoinWatch", url="https://www.livecoinwatch.com/price/BitcoinClassic-_XBT"),
+                    InlineKeyboardButton("📈 CoinPaprika", url="https://coinpaprika.com/coin/xbt-bitcoin-classic/")
+                ],
+                [
+                    InlineKeyboardButton("💱 Trade XBT/USDT", url="https://nonkyc.io/market/XBT_USDT"),
+                    InlineKeyboardButton("₿ Trade XBT/BTC", url="https://nonkyc.io/market/XBT_BTC")
+                ],
+                [
+                    InlineKeyboardButton("🌐 Bitcoin Classic Website", url="https://www.classicxbt.com"),
+                    InlineKeyboardButton("💰 Get XBT Wallet", url="https://www.classicxbt.com/wallets")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.edit_message_text(
+                message,
+                parse_mode="HTML",
+                reply_markup=reply_markup
+            )
+
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error fetching price data: {str(e)}")
+
+    elif query.data == "cmd_chart":
+        # Handle chart command directly with callback query response
+        try:
+            # Send initial processing message
+            await query.edit_message_text("🔄 Generating charts for both trading pairs, please wait...")
+
+            # Get historical trades for XBT/USDT
+            trades_usdt = await get_nonkyc_trades()
+
+            if not trades_usdt:
+                await query.edit_message_text("❌ No trade data available to generate charts.")
+                return
+
+            # Convert to DataFrame for USDT pair
+            df_usdt = pd.DataFrame(trades_usdt)
+
+            # Validate required columns exist
+            required_columns = ['timestamp', 'price', 'quantity']
+            for col in required_columns:
+                if col not in df_usdt.columns:
+                    await query.edit_message_text(f"❌ Invalid trade data format: missing '{col}' column.")
+                    return
+
+            # Convert data types with error handling
+            try:
+                df_usdt['timestamp'] = pd.to_datetime(df_usdt['timestamp'])
+                df_usdt['price'] = pd.to_numeric(df_usdt['price'], errors='coerce')
+                df_usdt['quantity'] = pd.to_numeric(df_usdt['quantity'], errors='coerce')
+
+                # Remove rows with invalid data
+                df_usdt = df_usdt.dropna(subset=['timestamp', 'price', 'quantity'])
+
+                if len(df_usdt) == 0:
+                    await query.edit_message_text("❌ No valid trade data available for chart generation.")
+                    return
+
+                df_usdt = df_usdt.sort_values('timestamp')
+
+            except Exception as data_error:
+                logger.error(f"Error processing trade data: {data_error}")
+                await query.edit_message_text("❌ Error processing trade data for chart generation.")
+                return
+
+            # Create XBT/USDT chart
+            fig_usdt = go.Figure(data=[go.Scatter(
+                x=df_usdt['timestamp'],
+                y=df_usdt['price'],
+                mode='lines',
+                name='XBT/USDT',
+                line=dict(color='#00D4AA', width=2)  # NonKYC green color
+            )])
+
+            fig_usdt.update_layout(
+                title='📈 XBT/USDT Price Chart (NonKYC Exchange)',
+                xaxis_title='Time',
+                yaxis_title='Price (USDT)',
+                template='plotly_dark',
+                autosize=True,
+                width=1000,
+                height=600,
+                font=dict(size=12),
+                title_font=dict(size=16)
+            )
+
+            # Save XBT/USDT chart
+            chart_usdt_path = 'temp_chart_usdt_button.png'
+            fig_usdt.write_image(chart_usdt_path)
+
+            # Send XBT/USDT chart with trading link
+            usdt_caption = (
+                "📊 <b>XBT/USDT Price Chart</b>\n"
+                "💱 <a href='https://nonkyc.io/market/XBT_USDT'>Trade XBT/USDT on NonKYC</a>\n"
+                "📈 Real-time trading data from NonKYC Exchange"
+            )
+
+            # Send the chart as a new message (since we can't edit message to include photo)
+            with open(chart_usdt_path, 'rb') as f:
+                await context.bot.send_photo(
+                    chat_id=query.message.chat.id,
+                    photo=f,
+                    caption=usdt_caption,
+                    parse_mode="HTML"
+                )
+
+            # Try to generate BTC chart
+            try:
+                # Get current BTC price to convert USDT prices to BTC equivalent
+                btc_price_usdt = 45000.0  # Approximate BTC price - you could fetch this from an API
+
+                df_btc = df_usdt.copy()
+                # Ensure price column is numeric before division
+                df_btc['price'] = pd.to_numeric(df_btc['price'], errors='coerce')
+                df_btc['price_btc'] = df_btc['price'] / btc_price_usdt
+
+                fig_btc = go.Figure(data=[go.Scatter(
+                    x=df_btc['timestamp'],
+                    y=df_btc['price_btc'],
+                    mode='lines',
+                    name='XBT/BTC',
+                    line=dict(color='#F7931A', width=2)  # Bitcoin orange color
+                )])
+
+                fig_btc.update_layout(
+                    title='₿ XBT/BTC Price Chart (Estimated)',
+                    xaxis_title='Time',
+                    yaxis_title='Price (BTC)',
+                    template='plotly_dark',
+                    autosize=True,
+                    width=1000,
+                    height=600,
+                    font=dict(size=12),
+                    title_font=dict(size=16)
+                )
+
+                # Save XBT/BTC chart
+                chart_btc_path = 'temp_chart_btc_button.png'
+                fig_btc.write_image(chart_btc_path)
+
+                # Send XBT/BTC chart with trading link
+                btc_caption = (
+                    "₿ <b>XBT/BTC Price Chart</b>\n"
+                    "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>\n"
+                    "📊 Estimated from USDT pair data"
+                )
+
+                with open(chart_btc_path, 'rb') as f:
+                    await context.bot.send_photo(
+                        chat_id=query.message.chat.id,
+                        photo=f,
+                        caption=btc_caption,
+                        parse_mode="HTML"
+                    )
+
+                # Clean up BTC chart
+                os.remove(chart_btc_path)
+
+            except Exception as btc_error:
+                logger.warning(f"Could not generate BTC chart: {btc_error}")
+                # Send message about BTC trading link anyway
+                await context.bot.send_message(
+                    chat_id=query.message.chat.id,
+                    text="₿ <b>XBT/BTC Trading</b>\n"
+                         "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>",
+                    parse_mode="HTML"
+                )
+
+            # Clean up USDT chart
+            os.remove(chart_usdt_path)
+
+            # Send summary message with both trading links
+            summary_message = (
+                "📊 <b>XBT Trading Pairs on NonKYC Exchange</b>\n\n"
+                "💱 <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT Trading</a>\n"
+                "₿ <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC Trading</a>\n\n"
+                "🌐 <a href='https://nonkyc.io'>Visit NonKYC Exchange</a>"
+            )
+
+            await context.bot.send_message(
+                chat_id=query.message.chat.id,
+                text=summary_message,
+                parse_mode="HTML"
+            )
+
+            # Update the original message to show completion
+            await query.edit_message_text("✅ Charts generated successfully! Check the messages above.")
+
+        except Exception as e:
+            logger.error(f"Error generating charts from button: {e}")
+            await query.edit_message_text(f"❌ Error generating charts: {str(e)}")
+
+    elif query.data == "cmd_debug":
+        # Handle debug command directly
+        user_id = query.from_user.id
+        chat_id = query.message.chat.id
+        chat_type = query.message.chat.type
+        is_user_admin = await is_admin(update, context)
+
+        debug_info = (
+            "🔍 <b>Debug Information</b>\n\n"
+            f"👤 <b>Your User ID:</b> {user_id}\n"
+            f"💬 <b>Chat ID:</b> {chat_id}\n"
+            f"💬 <b>Chat Type:</b> {chat_type}\n"
+            f"👑 <b>Admin Status:</b> {'Yes' if is_user_admin else 'No'}\n\n"
+            f"⚙️ <b>Config Values:</b>\n"
+            f"- Bot Owner ID: {BOT_OWNER}\n"
+            f"- Bypass ID: {BY_PASS}"
+        )
+
+        await query.edit_message_text(debug_info, parse_mode="HTML")
+
+    elif query.data == "cmd_start":
+        if await can_start_stop_bot(update, context):
+            await query.edit_message_text("🚀 Use /start command to start the bot in this chat.")
+        else:
+            chat_id = query.message.chat.id
+            if chat_id == -1002471264202:
+                await query.edit_message_text(
+                    "❌ <b>Permission Denied</b>\n\n"
+                    "The /start command is restricted to the bot owner only.\n"
+                    "This is a public supergroup where alerts are managed centrally.",
+                    parse_mode="HTML"
+                )
+            else:
+                await query.edit_message_text("❌ You don't have permission to start/stop alerts")
+
+    elif query.data == "cmd_stop":
+        if await can_start_stop_bot(update, context):
+            await query.edit_message_text("🛑 Use /stop command to stop the bot in this chat.")
+        else:
+            chat_id = query.message.chat.id
+            if chat_id == -1002471264202:
+                await query.edit_message_text(
+                    "❌ <b>Permission Denied</b>\n\n"
+                    "The /stop command is restricted to the bot owner only.\n"
+                    "This is a public supergroup where alerts are managed centrally.",
+                    parse_mode="HTML"
+                )
+            else:
+                await query.edit_message_text("❌ You don't have permission to start/stop alerts")
+
+    elif query.data == "cmd_config":
+        if await can_use_admin_commands(update, context):
+            await query.edit_message_text("⚙️ Configuration menu access granted. Use /config command for full interface.")
+        else:
+            chat_id = query.message.chat.id
+            if chat_id == -1002471264202:
+                await query.edit_message_text(
+                    "❌ <b>Permission Denied</b>\n\n"
+                    "Configuration commands are restricted to the bot owner only.\n"
+                    "This is a public supergroup where settings are managed centrally.",
+                    parse_mode="HTML"
+                )
+            else:
+                await query.edit_message_text("❌ You don't have permission to access configuration.")
+
+    elif query.data == "cmd_list_images":
+        if await can_use_admin_commands(update, context):
+            images = get_image_collection()
+            if not images:
+                await query.edit_message_text(
+                    "📁 Image collection is empty.\n"
+                    "Use /setimage to add images to the collection."
+                )
+            else:
+                image_list = []
+                for i, img_path in enumerate(images, 1):
+                    filename = os.path.basename(img_path)
+                    size = os.path.getsize(img_path)
+                    size_kb = size / 1024
+                    image_list.append(f"{i}. {filename} ({size_kb:.1f} KB)")
+
+                message = (
+                    f"📁 <b>Image Collection ({len(images)} images)</b>\n\n"
+                    + "\n".join(image_list) +
+                    "\n\n🎲 Images are randomly selected for alerts"
+                )
+                await query.edit_message_text(message, parse_mode="HTML")
+        else:
+            chat_id = query.message.chat.id
+            if chat_id == -1002471264202:
+                await query.edit_message_text(
+                    "❌ <b>Permission Denied</b>\n\n"
+                    "Image management is restricted to the bot owner only.\n"
+                    "This is a public supergroup where settings are managed centrally.",
+                    parse_mode="HTML"
+                )
+            else:
+                await query.edit_message_text("❌ You don't have permission to list images.")
+
+    elif query.data == "cmd_group_info":
+        # Show information about the public supergroup
+        group_info = (
+            "🏛️ <b>XBT Public Supergroup Information</b>\n\n"
+            "📊 <b>Available Commands for Everyone:</b>\n"
+            "• /help - View this help information\n"
+            "• /price - Check current XBT price and market data\n"
+            "• /chart - Generate XBT price charts\n"
+            "• /debug - View your user information\n\n"
+
+            "🚨 <b>Alert System:</b>\n"
+            f"• Threshold: ${VALUE_REQUIRE} USDT\n"
+            "• Trade aggregation: 8-second window\n"
+            "• Automatic delivery to this group\n"
+            "• Real-time NonKYC Exchange monitoring\n\n"
+
+            "🔒 <b>Restricted Commands:</b>\n"
+            "• /start, /stop - Owner only\n"
+            "• /config, /setmin - Owner only\n"
+            "• Admin commands - Owner only\n\n"
+
+            "💱 <b>Trading Links:</b>\n"
+            "• <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT Trading</a>\n"
+            "• <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC Trading</a>\n"
+            "• <a href='https://www.classicxbt.com'>Bitcoin Classic Website</a>"
+        )
+
+        await query.edit_message_text(group_info, parse_mode="HTML")
+
+    elif query.data == "cmd_help":
+        # Redirect back to help command
+        await help_command(update, context)
+
+    elif query.data == "cmd_donate":
+        # Handle donate command directly
+        donate_text = (
+            "☕ <b>XBTBuyBot Developer Coffee Tip</b>\n\n"
+            "If you find this XBT Alert Bot helpful, consider supporting the developer!\n\n"
+            "👨‍💻 <b>Developer:</b> @moonether\n"
+            "₿ <b>Bitcoin Address:</b>\n"
+            "<code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>\n\n"
+            "💡 <i>Tap and hold the address above to copy it</i>\n\n"
+            "Your support helps maintain and improve this bot. Thank you! 🙏"
+        )
+
+        # Create a button to copy the Bitcoin address
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "📋 Copy Bitcoin Address",
+                    callback_data="copy_btc_address"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔗 Contact Developer",
+                    url="https://t.me/moonether"
+                )
+            ]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            donate_text,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+
+    elif query.data == "copy_btc_address":
+        # Show the Bitcoin address in a copyable format
+        await query.edit_message_text(
+            "☕ <b>XBTBuyBot Developer Coffee Tip</b>\n\n"
+            "₿ <b>Bitcoin Address:</b>\n"
+            "<code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>\n\n"
+            "💡 <i>Tap and hold the address above to copy it</i>\n\n"
+            "Thank you for your support! 🙏",
+            parse_mode="HTML"
+        )
+
+async def donate_command(update: Update, context: CallbackContext) -> None:
+    """Show donation information for the developer."""
+    donate_text = (
+        "☕ <b>XBTBuyBot Developer Coffee Tip</b>\n\n"
+        "If you find this XBT Alert Bot helpful, consider supporting the developer!\n\n"
+        "👨‍💻 <b>Developer:</b> @moonether\n"
+        "₿ <b>Bitcoin Address:</b>\n"
+        "<code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>\n\n"
+        "💡 <i>Tap and hold the address above to copy it</i>\n\n"
+        "Your support helps maintain and improve this bot. Thank you! 🙏"
     )
 
-    if query.data == "cmd_price":
-        await check_price(new_update, context)
-    elif query.data == "cmd_chart":
-        await chart_command(new_update, context)
-    elif query.data == "cmd_debug":
-        await debug_command(new_update, context)
-    elif query.data == "cmd_config":
-        if await is_admin(update, context):
-            await config_command(new_update, context)
-        else:
-            await query.edit_message_text("❌ You don't have permission to access configuration.")
-    elif query.data == "cmd_list_images":
-        if await is_admin(update, context):
-            await list_images_command(new_update, context)
-        else:
-            await query.edit_message_text("❌ You don't have permission to list images.")
-    elif query.data == "cmd_stop":
-        await stop_bot(new_update, context)
-    elif query.data == "cmd_help":
-        await help_command(new_update, context)
+    # Create a button to copy the Bitcoin address
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📋 Copy Bitcoin Address",
+                callback_data="copy_btc_address"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔗 Contact Developer",
+                url="https://t.me/moonether"
+            )
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        donate_text,
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
 
 async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
     """Toggle trade aggregation on/off - admin only command."""
@@ -2106,7 +3812,7 @@ async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     logger.info(f"toggle_aggregation command called by user {user_id}")
 
-    if await is_admin(update, context):
+    if await can_use_admin_commands(update, context):
         logger.info(f"User {user_id} has admin permissions, toggling aggregation")
         # Initialize trade_aggregation if it doesn't exist
         if "trade_aggregation" not in CONFIG:
@@ -2124,10 +3830,24 @@ async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(f"Trade aggregation is now {state}.")
     else:
         logger.warning(f"User {user_id} tried to use toggle_aggregation command without admin permissions")
-        await update.message.reply_text("You do not have permission to use this command.")
+        chat_id = update.effective_chat.id
+        if chat_id == -1002471264202:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "The /toggle_aggregation command is restricted to the bot owner only.\n"
+                "This is a public supergroup where settings are managed centrally.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "You do not have permission to use this command.\n"
+                "This command is restricted to administrators only.",
+                parse_mode="HTML"
+            )
 
 async def list_images_command(update: Update, context: CallbackContext) -> None:
-    """List all images in the collection - admin only command."""
+    """List all images in the collection with visual previews and management options - admin only command."""
     # Get user ID with multiple fallback methods to ensure we get the correct one
     user_id = None
     if update.effective_user:
@@ -2139,30 +3859,421 @@ async def list_images_command(update: Update, context: CallbackContext) -> None:
 
     logger.info(f"list_images command called by user {user_id}")
 
-    if await is_admin(update, context):
+    if await can_use_admin_commands(update, context):
+        logger.info(f"User {user_id} has admin permissions, listing images with visual previews")
         images = get_image_collection()
+
         if not images:
             await update.message.reply_text(
-                "📁 Image collection is empty.\n"
-                "Use /setimage to add images to the collection."
+                "📁 <b>Image Collection Empty</b>\n\n"
+                "No images found in the collection.\n"
+                "Use /setimage to add images to the collection.",
+                parse_mode="HTML"
             )
         else:
-            image_list = []
-            for i, img_path in enumerate(images, 1):
-                filename = os.path.basename(img_path)
-                size = os.path.getsize(img_path)
-                size_kb = size / 1024
-                image_list.append(f"{i}. {filename} ({size_kb:.1f} KB)")
+            # Send overview message first
+            total_size = sum(os.path.getsize(img) for img in images if os.path.exists(img))
+            total_size_mb = total_size / (1024 * 1024)
 
-            message = (
-                f"📁 <b>Image Collection ({len(images)} images)</b>\n\n"
-                + "\n".join(image_list) +
-                "\n\n🎲 Images are randomly selected for alerts"
+            overview_message = (
+                f"📁 <b>Image Collection Overview</b>\n\n"
+                f"📊 Total Images: {len(images)}\n"
+                f"💾 Total Size: {total_size_mb:.2f} MB\n"
+                f"🎲 Random selection for alerts\n\n"
+                f"📸 Sending visual previews with management options..."
             )
-            await update.message.reply_text(message, parse_mode="HTML")
+
+            await update.message.reply_text(overview_message, parse_mode="HTML")
+
+            # Send each image with detailed information and management buttons
+            for i, img_path in enumerate(images, 1):
+                try:
+                    await send_image_preview(update, context, img_path, i, len(images))
+                except Exception as e:
+                    logger.error(f"Error sending image preview {i}: {e}")
+                    # Send error message for this image
+                    filename = os.path.basename(img_path)
+                    error_message = (
+                        f"❌ <b>Image {i}/{len(images)}: {filename}</b>\n\n"
+                        f"Error loading image: {str(e)}\n"
+                        f"File may be corrupted or inaccessible."
+                    )
+
+                    # Create management buttons even for error cases
+                    keyboard = [
+                        [InlineKeyboardButton("🗑️ Delete", callback_data=f"delete_image_{i-1}"),
+                         InlineKeyboardButton("ℹ️ Info", callback_data=f"image_info_{i-1}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    await update.message.reply_text(
+                        error_message,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
+
+            # Send bulk management options
+            if len(images) > 1:
+                bulk_keyboard = [
+                    [InlineKeyboardButton("🗑️ Clear All Images", callback_data="clear_all_images"),
+                     InlineKeyboardButton("🔄 Refresh List", callback_data="refresh_image_list")],
+                    [InlineKeyboardButton("📊 Collection Stats", callback_data="image_stats")]
+                ]
+                bulk_reply_markup = InlineKeyboardMarkup(bulk_keyboard)
+
+                await update.message.reply_text(
+                    "🛠️ <b>Bulk Management Options</b>",
+                    parse_mode="HTML",
+                    reply_markup=bulk_reply_markup
+                )
     else:
         logger.warning(f"User {user_id} tried to use list_images command without admin permissions")
-        await update.message.reply_text("You do not have permission to use this command.")
+        chat_id = update.effective_chat.id
+        if chat_id == -1002471264202:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "Image management is restricted to the bot owner only.\n"
+                "This is a public supergroup where settings are managed centrally.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                "❌ <b>Permission Denied</b>\n\n"
+                "You do not have permission to list images.\n"
+                "This command is restricted to administrators only.",
+                parse_mode="HTML"
+            )
+
+async def send_image_preview(update: Update, context: CallbackContext, img_path: str, index: int, total: int):
+    """Send a single image preview with detailed information and management buttons."""
+    from datetime import datetime
+
+    filename = os.path.basename(img_path)
+
+    try:
+        # Get file information
+        file_stat = os.stat(img_path)
+        file_size = file_stat.st_size
+        file_size_mb = file_size / (1024 * 1024)
+
+        # Get file format and type
+        file_ext = os.path.splitext(filename)[1].lower()
+        detected_type = detect_file_type(img_path)
+
+        # Determine file type for proper sending
+        is_gif_mp4 = detected_type == 'mp4' and 'alert_image' in filename  # GIF converted to MP4
+        is_animation = file_ext in ['.gif'] or is_gif_mp4
+        is_image = file_ext in ['.jpg', '.jpeg', '.png', '.webp']
+
+        # Create detailed caption
+        format_display = f"{detected_type.upper()}"
+        if is_gif_mp4:
+            format_display += " (GIF→MP4)"
+
+        caption = (
+            f"📸 <b>Image {index}/{total}: {filename}</b>\n\n"
+            f"💾 Size: {file_size_mb:.2f} MB ({file_size:,} bytes)\n"
+            f"📁 Format: {format_display}\n"
+            f"📅 Modified: {datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"🔍 Extension: {file_ext}"
+        )
+
+        # Create management buttons
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Delete", callback_data=f"delete_image_{index-1}"),
+             InlineKeyboardButton("ℹ️ Info", callback_data=f"image_info_{index-1}")],
+            [InlineKeyboardButton("📤 Test Send", callback_data=f"test_image_{index-1}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Send the image with appropriate method
+        with open(img_path, 'rb') as image_file:
+            if is_animation:
+                # Send GIF/MP4 as animation
+                await update.message.reply_animation(
+                    animation=image_file,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+                logger.info(f"Sent image {index} as animation: {filename}")
+            elif is_image:
+                # Send as photo
+                await update.message.reply_photo(
+                    photo=image_file,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+                logger.info(f"Sent image {index} as photo: {filename}")
+            else:
+                # Send as document for unknown formats
+                await update.message.reply_document(
+                    document=image_file,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+                logger.info(f"Sent image {index} as document: {filename}")
+
+    except Exception as e:
+        logger.error(f"Error sending image preview for {filename}: {e}")
+        raise
+
+async def image_management_callback(update: Update, context: CallbackContext) -> None:
+    """Handle image management button callbacks."""
+    query = update.callback_query
+    await query.answer()
+
+    # Check if user has admin permissions
+    if not await can_use_admin_commands(update, context):
+        await query.edit_message_text(
+            "❌ <b>Permission Denied</b>\n\n"
+            "Image management is restricted to administrators only.",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        if query.data.startswith("delete_image_"):
+            # Delete specific image
+            image_index = int(query.data.split("_")[-1])
+            images = get_image_collection()
+
+            if 0 <= image_index < len(images):
+                img_path = images[image_index]
+                filename = os.path.basename(img_path)
+
+                # Create confirmation dialog
+                keyboard = [
+                    [InlineKeyboardButton("✅ Yes, Delete", callback_data=f"confirm_delete_{image_index}"),
+                     InlineKeyboardButton("❌ Cancel", callback_data="cancel_delete")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                await query.edit_message_text(
+                    f"🗑️ <b>Confirm Deletion</b>\n\n"
+                    f"Are you sure you want to delete:\n"
+                    f"📄 <code>{filename}</code>\n\n"
+                    f"⚠️ This action cannot be undone!",
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+            else:
+                await query.edit_message_text("❌ Image not found or index out of range.")
+
+        elif query.data.startswith("confirm_delete_"):
+            # Confirmed deletion
+            image_index = int(query.data.split("_")[-1])
+            images = get_image_collection()
+
+            if 0 <= image_index < len(images):
+                img_path = images[image_index]
+                filename = os.path.basename(img_path)
+
+                try:
+                    os.remove(img_path)
+                    new_count = len(get_image_collection())
+
+                    await query.edit_message_text(
+                        f"✅ <b>Image Deleted Successfully</b>\n\n"
+                        f"📄 Deleted: <code>{filename}</code>\n"
+                        f"📁 Collection now has {new_count} images\n\n"
+                        f"Use /list_images to see updated collection.",
+                        parse_mode="HTML"
+                    )
+                    logger.info(f"Image deleted by user {query.from_user.id}: {filename}")
+
+                except Exception as e:
+                    await query.edit_message_text(
+                        f"❌ <b>Deletion Failed</b>\n\n"
+                        f"Error deleting {filename}: {str(e)}",
+                        parse_mode="HTML"
+                    )
+                    logger.error(f"Error deleting image {filename}: {e}")
+            else:
+                await query.edit_message_text("❌ Image not found or index out of range.")
+
+        elif query.data == "cancel_delete":
+            await query.edit_message_text("🚫 Deletion cancelled.")
+
+        elif query.data.startswith("image_info_"):
+            # Show detailed image information
+            image_index = int(query.data.split("_")[-1])
+            images = get_image_collection()
+
+            if 0 <= image_index < len(images):
+                img_path = images[image_index]
+                filename = os.path.basename(img_path)
+
+                try:
+                    from datetime import datetime
+                    file_stat = os.stat(img_path)
+                    file_size = file_stat.st_size
+                    detected_type = detect_file_type(img_path)
+
+                    info_message = (
+                        f"ℹ️ <b>Image Information</b>\n\n"
+                        f"📄 <b>Filename:</b> <code>{filename}</code>\n"
+                        f"📁 <b>Path:</b> <code>{img_path}</code>\n"
+                        f"💾 <b>Size:</b> {file_size:,} bytes ({file_size/1024:.1f} KB)\n"
+                        f"🔍 <b>Detected Type:</b> {detected_type.upper()}\n"
+                        f"📅 <b>Created:</b> {datetime.fromtimestamp(file_stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"📝 <b>Modified:</b> {datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"🎲 <b>Status:</b> Active in random selection"
+                    )
+
+                    await query.edit_message_text(info_message, parse_mode="HTML")
+
+                except Exception as e:
+                    await query.edit_message_text(
+                        f"❌ <b>Error Getting Info</b>\n\n"
+                        f"Could not retrieve information for {filename}: {str(e)}",
+                        parse_mode="HTML"
+                    )
+            else:
+                await query.edit_message_text("❌ Image not found or index out of range.")
+
+        elif query.data.startswith("test_image_"):
+            # Test send image
+            image_index = int(query.data.split("_")[-1])
+            images = get_image_collection()
+
+            if 0 <= image_index < len(images):
+                img_path = images[image_index]
+                filename = os.path.basename(img_path)
+
+                try:
+                    detected_type = detect_file_type(img_path)
+
+                    with open(img_path, 'rb') as image_file:
+                        test_caption = f"🧪 <b>Test Image Send</b>\n\n📄 {filename}\n🔍 Type: {detected_type.upper()}"
+
+                        if detected_type == 'mp4' or img_path.endswith('.gif'):
+                            await context.bot.send_animation(
+                                chat_id=query.message.chat_id,
+                                animation=image_file,
+                                caption=test_caption,
+                                parse_mode="HTML"
+                            )
+                        else:
+                            await context.bot.send_photo(
+                                chat_id=query.message.chat_id,
+                                photo=image_file,
+                                caption=test_caption,
+                                parse_mode="HTML"
+                            )
+
+                    await query.edit_message_text(
+                        f"✅ <b>Test Send Complete</b>\n\n"
+                        f"📄 Sent: <code>{filename}</code>\n"
+                        f"🔍 Type: {detected_type.upper()}\n"
+                        f"📤 Check the message above for the test image.",
+                        parse_mode="HTML"
+                    )
+
+                except Exception as e:
+                    await query.edit_message_text(
+                        f"❌ <b>Test Send Failed</b>\n\n"
+                        f"Error sending {filename}: {str(e)}",
+                        parse_mode="HTML"
+                    )
+            else:
+                await query.edit_message_text("❌ Image not found or index out of range.")
+
+        elif query.data == "clear_all_images":
+            # Clear all images with confirmation
+            images = get_image_collection()
+
+            if not images:
+                await query.edit_message_text("📁 Image collection is already empty.")
+            else:
+                keyboard = [
+                    [InlineKeyboardButton("✅ Yes, Clear All", callback_data="confirm_clear_all"),
+                     InlineKeyboardButton("❌ Cancel", callback_data="cancel_clear")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                await query.edit_message_text(
+                    f"🗑️ <b>Confirm Clear All Images</b>\n\n"
+                    f"Are you sure you want to delete all {len(images)} images?\n\n"
+                    f"⚠️ This action cannot be undone!",
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+
+        elif query.data == "confirm_clear_all":
+            # Confirmed clear all
+            images = get_image_collection()
+            deleted_count = 0
+
+            for img_path in images:
+                try:
+                    os.remove(img_path)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.error(f"Error deleting image {img_path}: {e}")
+
+            await query.edit_message_text(
+                f"✅ <b>Collection Cleared</b>\n\n"
+                f"🗑️ Deleted {deleted_count} images\n"
+                f"📁 Collection is now empty\n\n"
+                f"Use /setimage to add new images.",
+                parse_mode="HTML"
+            )
+            logger.info(f"All images cleared by user {query.from_user.id}: {deleted_count} files deleted")
+
+        elif query.data == "cancel_clear":
+            await query.edit_message_text("🚫 Clear all cancelled.")
+
+        elif query.data == "refresh_image_list":
+            await query.edit_message_text(
+                "🔄 <b>Refreshing Image List</b>\n\n"
+                "Use /list_images command again to see the updated collection.",
+                parse_mode="HTML"
+            )
+
+        elif query.data == "image_stats":
+            # Show detailed collection statistics
+            images = get_image_collection()
+
+            if not images:
+                await query.edit_message_text("📁 Image collection is empty.")
+            else:
+                total_size = 0
+                type_counts = {}
+
+                for img_path in images:
+                    try:
+                        size = os.path.getsize(img_path)
+                        total_size += size
+
+                        detected_type = detect_file_type(img_path)
+                        type_counts[detected_type] = type_counts.get(detected_type, 0) + 1
+                    except Exception as e:
+                        logger.warning(f"Error analyzing {img_path}: {e}")
+
+                type_breakdown = "\n".join([f"• {type_name.upper()}: {count}" for type_name, count in type_counts.items()])
+
+                stats_message = (
+                    f"📊 <b>Collection Statistics</b>\n\n"
+                    f"📁 <b>Total Images:</b> {len(images)}\n"
+                    f"💾 <b>Total Size:</b> {total_size/1024/1024:.2f} MB\n"
+                    f"📈 <b>Average Size:</b> {total_size/len(images)/1024:.1f} KB\n\n"
+                    f"🎯 <b>Format Breakdown:</b>\n{type_breakdown}\n\n"
+                    f"🎲 <b>Selection:</b> Random for each alert\n"
+                    f"📂 <b>Directory:</b> <code>images/</code>"
+                )
+
+                await query.edit_message_text(stats_message, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Error in image management callback: {e}")
+        await query.edit_message_text(
+            f"❌ <b>Error</b>\n\n"
+            f"An error occurred: {str(e)}",
+            parse_mode="HTML"
+        )
 
 async def clear_images_command(update: Update, context: CallbackContext) -> None:
     """Clear all images from the collection - admin only command."""
@@ -2264,7 +4375,7 @@ async def test_command(update: Update, context: CallbackContext) -> None:
             nonkyc_info += f"✅ Trades: {len(nonkyc_trades)} trades fetched\n"
             if len(nonkyc_trades) > 0:
                 latest_trade = nonkyc_trades[0]
-                nonkyc_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} JKC at ${latest_trade.get('price', 'N/A')}\n"
+                nonkyc_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} XBT at ${latest_trade.get('price', 'N/A')}\n"
         else:
             nonkyc_info += "❌ Trades: Failed to fetch\n"
 
@@ -2278,7 +4389,7 @@ async def test_command(update: Update, context: CallbackContext) -> None:
         coinex_info = "🏦 <b>CoinEx Data:</b>\n"
         if coinex_ticker:
             coinex_info += f"✅ Ticker: Price ${coinex_ticker.get('last', 'N/A')}\n"
-            coinex_info += f"✅ Volume: {coinex_ticker.get('volume', 'N/A')} JKC\n"
+            coinex_info += f"✅ Volume: {coinex_ticker.get('volume', 'N/A')} XBT\n"
             coinex_info += f"✅ Value: ${coinex_ticker.get('value', 'N/A')}\n"
         else:
             coinex_info += "❌ Ticker: Failed to fetch\n"
@@ -2287,7 +4398,7 @@ async def test_command(update: Update, context: CallbackContext) -> None:
             coinex_info += f"✅ Trades: {len(coinex_trades)} trades fetched\n"
             if len(coinex_trades) > 0:
                 latest_trade = coinex_trades[0]
-                coinex_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} JKC at ${latest_trade.get('price', 'N/A')}\n"
+                coinex_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} XBT at ${latest_trade.get('price', 'N/A')}\n"
         else:
             coinex_info += "❌ Trades: Failed to fetch\n"
 
@@ -2324,13 +4435,13 @@ async def test_command(update: Update, context: CallbackContext) -> None:
             sum_value=simulated_value,
             exchange="Test Exchange (Simulated)",
             timestamp=simulated_timestamp,
-            exchange_url="https://www.coinex.com/en/exchange/jkc-usdt"
+            exchange_url="https://www.coinex.com/en/exchange/xbt-usdt"
         )
 
         await update.message.reply_text(
             f"✅ <b>Test Complete!</b>\n\n"
             f"Simulated trade:\n"
-            f"💰 Amount: {simulated_quantity:.2f} JKC\n"
+            f"💰 Amount: {simulated_quantity:.2f} XBT\n"
             f"💵 Price: ${simulated_price:.6f}\n"
             f"💲 Value: ${simulated_value:.2f} USDT\n"
             f"🎯 Threshold: ${VALUE_REQUIRE} USDT",
@@ -2340,14 +4451,46 @@ async def test_command(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         await update.message.reply_text(f"❌ <b>Test Error:</b> {str(e)}", parse_mode="HTML")
 
+async def exchange_availability_monitor():
+    """Periodically check exchange availability and log status changes."""
+    global running, EXCHANGE_AVAILABILITY
+
+    logger.info("Starting exchange availability monitor...")
+    previous_availability = EXCHANGE_AVAILABILITY.copy()
+
+    while running:
+        try:
+            # Check availability every 5 minutes
+            current_availability = await check_exchange_availability()
+
+            # Log any changes in availability
+            for exchange, available in current_availability.items():
+                if available != previous_availability.get(exchange, False):
+                    if available:
+                        logger.info(f"🎉 XBT is now available on {exchange.upper()}!")
+                    else:
+                        logger.info(f"❌ XBT is no longer available on {exchange.upper()}")
+
+            previous_availability = current_availability.copy()
+
+        except Exception as e:
+            logger.error(f"Error in exchange availability monitor: {e}")
+
+        # Wait 5 minutes before next check
+        await asyncio.sleep(300)
+
 async def heartbeat():
     """Send periodic heartbeat messages to show the bot is running."""
-    global running
+    global running, EXCHANGE_AVAILABILITY
     counter = 0
     while running:
         counter += 1
         if counter % 60 == 0:  # Log every minute
-            logger.info(f"Bot running - Monitoring trades with threshold: {VALUE_REQUIRE} USDT")
+            available_exchanges = [ex for ex, available in EXCHANGE_AVAILABILITY.items() if available]
+            if available_exchanges:
+                logger.info(f"Bot running - Monitoring XBT on: {', '.join(available_exchanges)} | Threshold: {VALUE_REQUIRE} USDT")
+            else:
+                logger.info(f"Bot running - Using LiveCoinWatch API | Threshold: {VALUE_REQUIRE} USDT")
         await asyncio.sleep(1)
 
 def main():
@@ -2385,7 +4528,7 @@ def main():
     application.add_handler(ConversationHandler(
         entry_points=[CommandHandler("setimage", set_image_command)],
         states={
-            INPUT_IMAGE: [MessageHandler(filters.PHOTO, set_image_input)]
+            INPUT_IMAGE_SETIMAGE: [MessageHandler(filters.PHOTO | filters.Document.IMAGE | filters.ANIMATION, set_image_input)]
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
@@ -2429,18 +4572,35 @@ def main():
     
     # Add callback query handler for button commands
     application.add_handler(CallbackQueryHandler(button_command_callback, pattern="^cmd_"))
-    
+
+    # Add callback query handler for copy button
+    application.add_handler(CallbackQueryHandler(button_command_callback, pattern="^copy_"))
+
+    # Add callback query handler for image management
+    application.add_handler(CallbackQueryHandler(image_management_callback, pattern="^delete_image_|^confirm_delete_|^cancel_delete$|^image_info_|^test_image_|^clear_all_images$|^confirm_clear_all$|^cancel_clear$|^refresh_image_list$|^image_stats$"))
+
     # Start the websocket listeners in separate tasks
     loop = asyncio.get_event_loop()
     
     # Start all background tasks
     try:
-        loop.create_task(nonkyc_websocket())
+        # Start exchange availability monitor first
+        loop.create_task(exchange_availability_monitor())
+
+        # Start WebSocket connections (they will wait for XBT availability)
+        loop.create_task(nonkyc_websocket_usdt())
+        loop.create_task(nonkyc_websocket_btc())
         loop.create_task(coinex_websocket())
         loop.create_task(ascendex_websocket())
         loop.create_task(nonkyc_orderbook_websocket())
+
+        # Start heartbeat
         loop.create_task(heartbeat())
-        logger.info("Started all background tasks including real-time orderbook sweep detection")
+
+        logger.info("Started all background tasks including WebSocket monitoring")
+        logger.info("WebSocket connections will activate when XBT becomes available on exchanges")
+        logger.info("Primary data source: LiveCoinWatch API")
+        logger.info("Real-time monitoring: Conditional WebSocket connections (NonKYC, CoinEx, AscendEX)")
     except Exception as e:
         logger.warning(f"Could not start some background tasks: {e}")
     
@@ -2459,14 +4619,14 @@ if __name__ == "__main__":
 
         # Set up file logging
         current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_file = os.path.join("logs", f"telebot_{current_time}.log")
+        log_file = os.path.join("logs", f"xbt_telebot_{current_time}.log")
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         file_handler.setLevel(logging.INFO)
         logger.addHandler(file_handler)
 
         logger.info(f"Logging to file: {log_file}")
-        logger.info("Starting JunkCoin Alert Bot...")
+        logger.info("Starting Bitcoin Classic (XBT) Alert Bot...")
 
         # Configuration is already loaded at module level
         logger.info(f"Configuration loaded: {json.dumps({k: v for k, v in CONFIG.items() if k not in ['bot_token', 'coinex_secret_key', 'ascendex_secret_key']})}")

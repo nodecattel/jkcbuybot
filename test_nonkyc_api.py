@@ -16,7 +16,7 @@ async def test_nonkyc_ticker():
             ticker_msg = {
                 "method": "getMarket",
                 "params": {
-                    "symbol": "JKC/USDT"
+                    "symbol": "XBT/USDT"
                 },
                 "id": 999
             }
@@ -62,7 +62,7 @@ async def test_nonkyc_trades():
             trades_msg = {
                 "method": "getTrades",
                 "params": {
-                    "symbol": "JKC/USDT",
+                    "symbol": "XBT/USDT",
                     "limit": 100,
                     "sort": "DESC"
                 },

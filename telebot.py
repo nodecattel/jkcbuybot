@@ -33,7 +33,7 @@ def load_config():
             "active_chat_ids": [],
             "bot_owner": 0,
             "by_pass": 0,
-            "image_path": "junk_resized.jpeg",
+            "image_path": "xbt_resized.jpeg",
             "dynamic_threshold": {
                 "enabled": True,
                 "base_value": 300,
@@ -116,7 +116,7 @@ async def get_nonkyc_ticker():
             ticker_msg = {
                 "method": "getMarket",
                 "params": {
-                    "symbol": "JKC/USDT"
+                    "symbol": "XBT/USDT"
                 },
                 "id": 999
             }
@@ -144,7 +144,7 @@ async def get_nonkyc_trades():
             trades_msg = {
                 "method": "getTrades",
                 "params": {
-                    "symbol": "JKC/USDT",
+                    "symbol": "XBT/USDT",
                     "limit": 1000,
                     "sort": "DESC"
                 },
@@ -212,16 +212,16 @@ async def nonkyc_websocket():
             async with websockets.connect(uri, ping_interval=30) as websocket:
                 logger.info(f"Connected to NonKYC WebSocket at {uri}")
                 
-                # Subscribe to JKC/USDT trades
+                # Subscribe to XBT/USDT trades
                 subscribe_msg = {
                     "method": "subscribeTrades",
                     "params": {
-                        "symbol": "JKC/USDT"
+                        "symbol": "XBT/USDT"
                     },
                     "id": 1
                 }
                 await websocket.send(json.dumps(subscribe_msg))
-                logger.info("Subscribed to JKC/USDT trades on NonKYC")
+                logger.info("Subscribed to XBT/USDT trades on NonKYC")
                 
                 # Process messages
                 while running:
@@ -245,8 +245,8 @@ async def nonkyc_websocket():
                                     sum_value = price * quantity
                                     
                                     if round(sum_value, 2) > VALUE_REQUIRE:
-                                        logger.info(f"Large trade detected on NonKYC: {quantity} JKC at {price} USDT (Total: {sum_value} USDT)")
-                                        await process_message(price, quantity, sum_value, "NonKYC", timestamp, "https://nonkyc.io/market/JKC_USDT")
+                                        logger.info(f"Large trade detected on NonKYC: {quantity} XBT at {price} USDT (Total: {sum_value} USDT)")
+                                        await process_message(price, quantity, sum_value, "NonKYC", timestamp, "https://nonkyc.io/market/XBT_USDT")
                     except asyncio.TimeoutError:
                         # Just a timeout, continue
                         continue
@@ -274,7 +274,7 @@ async def coinex_websocket():
                 # Subscribe to deals
                 subscribe_msg = {
                     "method": "deals.subscribe",
-                    "params": ["JKCUSDT"],
+                    "params": ["XBTUSDT"],
                     "id": 456
                 }
                 await websocket.send(json.dumps(subscribe_msg))
@@ -296,7 +296,7 @@ async def coinex_websocket():
                                 # Only process new trades
                                 if timestamp > LAST_TRANS_COINEX and sum_value >= VALUE_REQUIRE:
                                     LAST_TRANS_COINEX = timestamp
-                                    await process_message(price, quantity, sum_value, "CoinEx", timestamp, "https://www.coinex.com/en/exchange/jkc-usdt")
+                                    await process_message(price, quantity, sum_value, "CoinEx", timestamp, "https://www.coinex.com/en/exchange/xbt-usdt")
                     except asyncio.TimeoutError:
                         # Just a timeout, continue
                         continue
@@ -324,7 +324,7 @@ async def ascendex_websocket():
                 # Subscribe to trades
                 subscribe_msg = {
                     "op": "sub",
-                    "ch": "trades:JKC/USDT"
+                    "ch": "trades:XBT/USDT"
                 }
                 await websocket.send(json.dumps(subscribe_msg))
                 
@@ -345,7 +345,7 @@ async def ascendex_websocket():
                                 # Only process new trades
                                 if timestamp > LAST_TRANS_ASENDEX and sum_value >= VALUE_REQUIRE:
                                     LAST_TRANS_ASENDEX = timestamp
-                                    await process_message(price, quantity, sum_value, "Ascendex", timestamp, "https://ascendex.com/en/cashtrade-spottrading/usdt/jkc")
+                                    await process_message(price, quantity, sum_value, "Ascendex", timestamp, "https://ascendex.com/en/cashtrade-spottrading/usdt/xbt")
                     except asyncio.TimeoutError:
                         # Just a timeout, continue
                         continue
@@ -376,7 +376,7 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
     
     message = (
         f"🚨 <b>Large Transaction Alert</b> 🚨\n\n"
-        f"💰 <b>Amount:</b> {quantity:.2f} JKC\n"
+        f"💰 <b>Amount:</b> {quantity:.2f} XBT\n"
         f"💵 <b>Price:</b> {price:.6f} USDT\n"
         f"💲 <b>Total Value:</b> {sum_value:.2f} USDT\n"
         f"🏦 <b>Exchange:</b> {exchange}\n"
@@ -435,13 +435,13 @@ async def chart_command(update: Update, context: CallbackContext) -> None:
             x=df['timestamp'],
             y=df['price'],
             mode='lines',
-            name='JKC/USDT',
+            name='XBT/USDT',
             line=dict(color='green', width=2)
         )])
         
         # Update layout
         fig.update_layout(
-            title='JKC/USDT Price Chart (NonKYC)',
+            title='XBT/USDT Price Chart (NonKYC)',
             xaxis_title='Time',
             yaxis_title='Price (USDT)',
             template='plotly_dark',
@@ -587,14 +587,14 @@ async def check_price(update: Update, context: CallbackContext) -> None:
     
     # Get market cap
     response = requests.get(
-        "https://api-junkpool.blockraid.io/list/summary/mainnet")
+        "https://api-xbtpool.blockraid.io/list/summary/mainnet")
     marketcap = int(float(current_price) *
                     float(response.json()['data']['supply']))
 
     button1 = InlineKeyboardButton(
-        text="CoinMarketCap", url="https://coinmarketcap.com/currencies/junkcoin")
+        text="📊 LiveCoinWatch", url="https://www.livecoinwatch.com/price/BitcoinClassic-_XBT")
     button2 = InlineKeyboardButton(
-        text="CoinGecko", url="https://www.coingecko.com/en/coins/junkcoin")
+        text="📈 CoinPaprika", url="https://coinpaprika.com/coin/xbt-bitcoin-classic/")
     keyboard = InlineKeyboardMarkup([
         [button1, button2]
     ])
