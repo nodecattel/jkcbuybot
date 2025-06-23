@@ -1,6 +1,6 @@
 {
   "bot_token": "7569347722:AAFRqWEVkwbTAqzPYCkr_74LMX-qqS5dmS4",
-  "value_require": 200.0,
+  "value_require": 150.0,
   "active_chat_ids": [
     -1002471264202,
     1145064309

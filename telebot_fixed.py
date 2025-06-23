@@ -130,15 +130,72 @@ def save_config(config_data):
             raise ValueError("Configuration data must be a dictionary")
 
         # Validate critical fields
-        required_fields = ['bot_token', 'bot_owner', 'value_require']
+        required_fields = ['bot_token', 'bot_owner', 'value_require', 'active_chat_ids', 'by_pass', 'image_path']
         for field in required_fields:
             if field not in config_data:
                 raise ValueError(f"Missing required field: {field}")
+
+        # Validate optional but important nested configurations
+        if 'dynamic_threshold' not in config_data:
+            config_data['dynamic_threshold'] = {
+                "enabled": False,
+                "base_value": 300,
+                "volume_multiplier": 0.05,
+                "price_check_interval": 3600,
+                "min_threshold": 100,
+                "max_threshold": 1000
+            }
+
+        if 'trade_aggregation' not in config_data:
+            config_data['trade_aggregation'] = {
+                "enabled": True,
+                "window_seconds": 8
+            }
+
+        if 'sweep_orders' not in config_data:
+            config_data['sweep_orders'] = {
+                "enabled": True,
+                "min_value": 50,
+                "check_interval": 2,
+                "min_orders_filled": 2
+            }
+
+        # Ensure API keys exist (can be empty)
+        if 'coinex_access_id' not in config_data:
+            config_data['coinex_access_id'] = ""
+        if 'coinex_secret_key' not in config_data:
+            config_data['coinex_secret_key'] = ""
+        if 'ascendex_access_id' not in config_data:
+            config_data['ascendex_access_id'] = ""
+        if 'ascendex_secret_key' not in config_data:
+            config_data['ascendex_secret_key'] = ""
+
+        # Validate bot_token format
+        bot_token = config_data.get('bot_token', '')
+        if not bot_token or bot_token == "YOUR_BOT_TOKEN":
+            raise ValueError("bot_token must be set to a valid Telegram bot token")
+        if not bot_token.count(':') == 1 or len(bot_token.split(':')[0]) < 8:
+            raise ValueError("bot_token format appears invalid (should be like '123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11')")
+
+        # Validate bot_owner
+        bot_owner = config_data.get('bot_owner', 0)
+        if not isinstance(bot_owner, int) or bot_owner <= 0:
+            raise ValueError("bot_owner must be a positive integer (Telegram user ID)")
 
         # Validate value_require range
         value_require = config_data.get('value_require', 100.0)
         if not isinstance(value_require, (int, float)) or value_require < 1 or value_require > 10000:
             raise ValueError(f"value_require must be between 1 and 10000, got: {value_require}")
+
+        # Validate active_chat_ids
+        active_chat_ids = config_data.get('active_chat_ids', [])
+        if not isinstance(active_chat_ids, list):
+            raise ValueError("active_chat_ids must be a list")
+
+        # Validate image_path
+        image_path = config_data.get('image_path', '')
+        if not image_path:
+            raise ValueError("image_path must be specified")
 
         # Create backup of current config
         backup_path = f"{CONFIG_FILE}.backup"
@@ -819,7 +876,22 @@ async def calculate_volume_periods(trades_data):
                 price = float(trade.get("price", 0))
                 # Handle different quantity field names
                 quantity = float(trade.get("quantity", trade.get("amount", 0)))
-                period_volume += price * quantity
+
+                # Check if this trade has side information for buy/sell filtering
+                trade_side = trade.get("side", trade.get("type", "unknown")).lower()
+
+                # Only count BUY volume for accurate volume calculations
+                if trade_side in ["buy", "b"]:
+                    trade_value = price * quantity
+                    period_volume += trade_value
+                    logger.debug(f"Including BUY trade in {period_name} volume: {quantity:.4f} XBT @ {price:.6f} = {trade_value:.2f} USDT")
+                elif trade_side in ["sell", "s"]:
+                    logger.debug(f"Excluding SELL trade from {period_name} volume: {quantity:.4f} XBT @ {price:.6f}")
+                else:
+                    # For unknown trades, include them but log warning
+                    trade_value = price * quantity
+                    period_volume += trade_value
+                    logger.debug(f"Including UNKNOWN side trade in {period_name} volume: {quantity:.4f} XBT @ {price:.6f} = {trade_value:.2f} USDT")
 
         volumes[period_name] = round(period_volume, 2)
 
@@ -1109,7 +1181,7 @@ async def process_orderbook_update(params):
                         individual_value = price_float * old_quantity
                         swept_asks.append({"price": price_float, "quantity": old_quantity, "value": individual_value})
                         total_swept_value += individual_value
-                        logger.debug(f"Ask level swept: {price_float:.6f} USDT, {old_quantity} XBT")
+                        logger.debug(f"Ask level swept: {price_float:.6f} USDT, {old_quantity:.4f} XBT")
                         # Remove from current orderbook
                         CURRENT_ORDERBOOK["asks"].pop(i)
 
@@ -1119,7 +1191,7 @@ async def process_orderbook_update(params):
                         individual_value = price_float * filled_quantity
                         swept_asks.append({"price": price_float, "quantity": filled_quantity, "value": individual_value})
                         total_swept_value += individual_value
-                        logger.debug(f"Ask level partially filled: {price_float:.6f} USDT, {filled_quantity} XBT")
+                        logger.debug(f"Ask level partially filled: {price_float:.6f} USDT, {filled_quantity:.4f} XBT")
                         # Update current orderbook
                         CURRENT_ORDERBOOK["asks"][i][1] = str(new_quantity)
 
@@ -1192,7 +1264,8 @@ async def process_orderbook_update(params):
                 sum_value=total_swept_value,
                 exchange="NonKYC (Orderbook Sweep)",
                 timestamp=timestamp,
-                exchange_url="https://nonkyc.io/market/XBT_USDT"
+                exchange_url="https://nonkyc.io/market/XBT_USDT",
+                trade_side="buy"  # Orderbook sweeps removing asks are buy orders
             )
         else:
             if total_swept_value < min_sweep_threshold:
@@ -1314,19 +1387,46 @@ async def nonkyc_websocket_usdt():
                                 sum_value = price * quantity
                                 timestamp = int(trade_data["timestampms"])  # Use timestampms for milliseconds
 
-                                # Only process trades newer than the last one
-                                if timestamp > LAST_TRANS_KYC:
+                                # Extract trade side (buy/sell) - check multiple possible field names
+                                trade_side = trade_data.get("side", trade_data.get("type", trade_data.get("takerSide", "unknown"))).lower()
+
+                                # Log trade details for debugging
+                                logger.debug(f"NonKYC USDT trade: {quantity:.4f} XBT at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
+
+                                # Only process BUY trades newer than the last one
+                                if timestamp > LAST_TRANS_KYC and trade_side in ["buy", "b"]:
                                     LAST_TRANS_KYC = timestamp
 
-                                    # Process the trade
+                                    logger.info(f"✅ Processing BUY trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+
+                                    # Process the trade with side information
                                     await process_message(
                                         price=price,
                                         quantity=quantity,
                                         sum_value=sum_value,
                                         exchange="NonKYC Exchange (XBT/USDT)",
                                         timestamp=timestamp,
-                                        exchange_url="https://nonkyc.io/market/XBT_USDT"
+                                        exchange_url="https://nonkyc.io/market/XBT_USDT",
+                                        trade_side=trade_side
                                     )
+                                elif timestamp > LAST_TRANS_KYC and trade_side in ["sell", "s"]:
+                                    # Update timestamp but don't process sell trades for alerts
+                                    LAST_TRANS_KYC = timestamp
+                                    logger.debug(f"⏭️ Skipping SELL trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                elif trade_side == "unknown":
+                                    logger.warning(f"⚠️ Unknown trade side for NonKYC USDT trade: {trade_data}")
+                                    # Process unknown trades to maintain backward compatibility, but log warning
+                                    if timestamp > LAST_TRANS_KYC:
+                                        LAST_TRANS_KYC = timestamp
+                                        await process_message(
+                                            price=price,
+                                            quantity=quantity,
+                                            sum_value=sum_value,
+                                            exchange="NonKYC Exchange (XBT/USDT)",
+                                            timestamp=timestamp,
+                                            exchange_url="https://nonkyc.io/market/XBT_USDT",
+                                            trade_side="unknown"
+                                        )
                     
                 except asyncio.TimeoutError:
                     # This is normal, just continue
@@ -1419,24 +1519,51 @@ async def nonkyc_websocket_btc():
                                 quantity = float(trade_data["quantity"])
                                 timestamp = int(trade_data["timestampms"])  # Use timestampms for milliseconds
 
-                                # Only process trades newer than the last one
-                                if timestamp > last_trans_btc:
+                                # Extract trade side (buy/sell) - check multiple possible field names
+                                trade_side = trade_data.get("side", trade_data.get("type", trade_data.get("takerSide", "unknown"))).lower()
+
+                                # Convert BTC price to USDT for comparison (estimate BTC at $100k)
+                                btc_usd_estimate = 100000  # This should be fetched from an API in production
+                                price_usdt_estimate = price_btc * btc_usd_estimate
+                                sum_value = price_usdt_estimate * quantity
+
+                                # Log trade details for debugging
+                                logger.debug(f"NonKYC BTC trade: {quantity:.4f} XBT at {price_btc:.8f} BTC ({price_usdt_estimate:.2f} USDT), side: {trade_side}, value: {sum_value:.2f} USDT")
+
+                                # Only process BUY trades newer than the last one
+                                if timestamp > last_trans_btc and trade_side in ["buy", "b"]:
                                     last_trans_btc = timestamp
 
-                                    # Convert BTC price to USDT for comparison (estimate BTC at $100k)
-                                    btc_usd_estimate = 100000  # This should be fetched from an API in production
-                                    price_usdt_estimate = price_btc * btc_usd_estimate
-                                    sum_value = price_usdt_estimate * quantity
+                                    logger.info(f"✅ Processing BUY trade: {quantity:.4f} XBT at {price_btc:.8f} BTC = {sum_value:.2f} USDT")
 
-                                    # Process the trade
+                                    # Process the trade with side information
                                     await process_message(
                                         price=price_usdt_estimate,
                                         quantity=quantity,
                                         sum_value=sum_value,
                                         exchange="NonKYC Exchange (XBT/BTC)",
                                         timestamp=timestamp,
-                                        exchange_url="https://nonkyc.io/market/XBT_BTC"
+                                        exchange_url="https://nonkyc.io/market/XBT_BTC",
+                                        trade_side=trade_side
                                     )
+                                elif timestamp > last_trans_btc and trade_side in ["sell", "s"]:
+                                    # Update timestamp but don't process sell trades for alerts
+                                    last_trans_btc = timestamp
+                                    logger.debug(f"⏭️ Skipping SELL trade: {quantity:.4f} XBT at {price_btc:.8f} BTC = {sum_value:.2f} USDT")
+                                elif trade_side == "unknown":
+                                    logger.warning(f"⚠️ Unknown trade side for NonKYC BTC trade: {trade_data}")
+                                    # Process unknown trades to maintain backward compatibility, but log warning
+                                    if timestamp > last_trans_btc:
+                                        last_trans_btc = timestamp
+                                        await process_message(
+                                            price=price_usdt_estimate,
+                                            quantity=quantity,
+                                            sum_value=sum_value,
+                                            exchange="NonKYC Exchange (XBT/BTC)",
+                                            timestamp=timestamp,
+                                            exchange_url="https://nonkyc.io/market/XBT_BTC",
+                                            trade_side="unknown"
+                                        )
 
                 except asyncio.TimeoutError:
                     # This is normal, just continue
@@ -1518,27 +1645,54 @@ async def coinex_websocket():
                     # Process trade messages
                     if "method" in response and response["method"] == "deals.update":
                         trades = response["params"][1]
-                        
+
                         for trade in trades:
                             # Extract trade details
                             price = float(trade["price"])
                             quantity = float(trade["amount"])
                             sum_value = price * quantity
                             timestamp = int(trade["time"] * 1000)  # Convert to milliseconds
-                            
-                            # Only process trades newer than the last one
-                            if timestamp > LAST_TRANS_COINEX:
+
+                            # Extract trade side (buy/sell) - CoinEx uses "type" field
+                            trade_side = trade.get("type", trade.get("side", "unknown")).lower()
+
+                            # Log trade details for debugging
+                            logger.debug(f"CoinEx trade: {quantity:.4f} XBT at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
+
+                            # Only process BUY trades newer than the last one
+                            if timestamp > LAST_TRANS_COINEX and trade_side in ["buy", "b"]:
                                 LAST_TRANS_COINEX = timestamp
-                                
-                                # Process the trade
+
+                                logger.info(f"✅ Processing CoinEx BUY trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+
+                                # Process the trade with side information
                                 await process_message(
                                     price=price,
                                     quantity=quantity,
                                     sum_value=sum_value,
                                     exchange="CoinEx Exchange",
                                     timestamp=timestamp,
-                                    exchange_url="https://www.coinex.com/exchange/XBT-USDT"
+                                    exchange_url="https://www.coinex.com/exchange/XBT-USDT",
+                                    trade_side=trade_side
                                 )
+                            elif timestamp > LAST_TRANS_COINEX and trade_side in ["sell", "s"]:
+                                # Update timestamp but don't process sell trades for alerts
+                                LAST_TRANS_COINEX = timestamp
+                                logger.debug(f"⏭️ Skipping CoinEx SELL trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                            elif trade_side == "unknown":
+                                logger.warning(f"⚠️ Unknown trade side for CoinEx trade: {trade}")
+                                # Process unknown trades to maintain backward compatibility, but log warning
+                                if timestamp > LAST_TRANS_COINEX:
+                                    LAST_TRANS_COINEX = timestamp
+                                    await process_message(
+                                        price=price,
+                                        quantity=quantity,
+                                        sum_value=sum_value,
+                                        exchange="CoinEx Exchange",
+                                        timestamp=timestamp,
+                                        exchange_url="https://www.coinex.com/exchange/XBT-USDT",
+                                        trade_side="unknown"
+                                    )
                     
                 except asyncio.TimeoutError:
                     # This is normal, just continue
@@ -1621,27 +1775,61 @@ async def ascendex_websocket():
                     # Process trade messages
                     if "m" in response and response["m"] == "trades":
                         trades = response["data"]
-                        
+
                         for trade in trades:
                             # Extract trade details
                             price = float(trade["p"])
                             quantity = float(trade["q"])
                             sum_value = price * quantity
                             timestamp = int(trade["ts"])
-                            
-                            # Only process trades newer than the last one
-                            if timestamp > LAST_TRANS_ASENDEX:
+
+                            # Extract trade side (buy/sell) - AscendEX uses "bm" field (true=buy, false=sell)
+                            is_buy_maker = trade.get("bm", None)
+                            if is_buy_maker is True:
+                                trade_side = "buy"
+                            elif is_buy_maker is False:
+                                trade_side = "sell"
+                            else:
+                                # Fallback to other possible field names
+                                trade_side = trade.get("side", trade.get("type", "unknown")).lower()
+
+                            # Log trade details for debugging
+                            logger.debug(f"AscendEX trade: {quantity:.4f} XBT at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
+
+                            # Only process BUY trades newer than the last one
+                            if timestamp > LAST_TRANS_ASENDEX and trade_side in ["buy", "b"]:
                                 LAST_TRANS_ASENDEX = timestamp
-                                
-                                # Process the trade
+
+                                logger.info(f"✅ Processing AscendEX BUY trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+
+                                # Process the trade with side information
                                 await process_message(
                                     price=price,
                                     quantity=quantity,
                                     sum_value=sum_value,
                                     exchange="AscendEX Exchange",
                                     timestamp=timestamp,
-                                    exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/xbt"
+                                    exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/xbt",
+                                    trade_side=trade_side
                                 )
+                            elif timestamp > LAST_TRANS_ASENDEX and trade_side in ["sell", "s"]:
+                                # Update timestamp but don't process sell trades for alerts
+                                LAST_TRANS_ASENDEX = timestamp
+                                logger.debug(f"⏭️ Skipping AscendEX SELL trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                            elif trade_side == "unknown":
+                                logger.warning(f"⚠️ Unknown trade side for AscendEX trade: {trade}")
+                                # Process unknown trades to maintain backward compatibility, but log warning
+                                if timestamp > LAST_TRANS_ASENDEX:
+                                    LAST_TRANS_ASENDEX = timestamp
+                                    await process_message(
+                                        price=price,
+                                        quantity=quantity,
+                                        sum_value=sum_value,
+                                        exchange="AscendEX Exchange",
+                                        timestamp=timestamp,
+                                        exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/xbt",
+                                        trade_side="unknown"
+                                    )
                     
                 except asyncio.TimeoutError:
                     # This is normal, just continue
@@ -1670,12 +1858,17 @@ async def ascendex_websocket():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
-async def process_message(price, quantity, sum_value, exchange, timestamp, exchange_url):
+async def process_message(price, quantity, sum_value, exchange, timestamp, exchange_url, trade_side="buy"):
     """Process a trade message and send notification if it meets criteria."""
     global PHOTO, PENDING_TRADES, LAST_AGGREGATION_CHECK
 
-    # Log all trades for debugging
-    logger.info(f"Processing trade: {exchange} - {quantity} XBT at {price} USDT (Total: {sum_value} USDT)")
+    # Log all trades for debugging with side information
+    logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} XBT at {price} USDT (Total: {sum_value} USDT)")
+
+    # Additional validation: Only process buy trades for alerts
+    if trade_side.lower() not in ["buy", "b", "unknown"]:
+        logger.debug(f"Skipping {trade_side.upper()} trade - not counting toward buy volume threshold")
+        return
 
     # Update threshold based on volume
     await update_threshold()
@@ -1723,14 +1916,35 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
         'timestamp': timestamp,
         'exchange': exchange,
         'exchange_url': exchange_url,
+        'trade_side': trade_side,
         'received_time': current_time,
         'validated': True  # Mark as validated
     })
 
-    # Log the pending trades for this buyer
-    total_pending = sum(t['sum_value'] for t in PENDING_TRADES[exchange][buyer_id]['trades'])
-    trade_count = len(PENDING_TRADES[exchange][buyer_id]['trades'])
-    logger.info(f"Added to pending trades: {buyer_id} - {trade_count} trades, Total: {total_pending:.2f} USDT (threshold: {VALUE_REQUIRE} USDT)")
+    # Log the pending trades for this buyer with enhanced validation
+    trades_list = PENDING_TRADES[exchange][buyer_id]['trades']
+    total_pending = sum(t['sum_value'] for t in trades_list)
+    trade_count = len(trades_list)
+
+    # Validate buy volume aggregation
+    buy_trades = [t for t in trades_list if t.get('trade_side', 'buy').lower() in ['buy', 'b', 'unknown']]
+    sell_trades = [t for t in trades_list if t.get('trade_side', 'buy').lower() in ['sell', 's']]
+
+    buy_volume = sum(t['sum_value'] for t in buy_trades)
+    sell_volume = sum(t['sum_value'] for t in sell_trades)
+
+    logger.info(f"📊 Pending trades for {buyer_id}: {trade_count} total trades")
+    logger.info(f"  🟢 BUY trades: {len(buy_trades)} trades = ${buy_volume:.2f} USDT")
+    if sell_trades:
+        logger.warning(f"  🔴 SELL trades detected: {len(sell_trades)} trades = ${sell_volume:.2f} USDT (should be filtered out!)")
+    logger.info(f"  💰 Total pending: ${total_pending:.2f} USDT (threshold: ${VALUE_REQUIRE} USDT)")
+
+    # Mathematical validation of aggregation
+    calculated_total = sum(t['price'] * t['quantity'] for t in trades_list)
+    if abs(calculated_total - total_pending) > 0.01:
+        logger.error(f"❌ AGGREGATION CALCULATION MISMATCH: Sum of stored values ${total_pending:.2f} != calculated total ${calculated_total:.2f}")
+    else:
+        logger.debug(f"✅ Aggregation calculation verified: ${total_pending:.2f} USDT")
 
     # Check if we should process this aggregation immediately
     window_start = PENDING_TRADES[exchange][buyer_id]['window_start']
@@ -1743,28 +1957,42 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
         trades = PENDING_TRADES[exchange][buyer_id]['trades']
 
         if total_pending >= VALUE_REQUIRE:
-            logger.info(f"Aggregated trades exceed threshold: {total_pending:.2f} USDT >= {VALUE_REQUIRE} USDT")
+            # Enhanced threshold validation logging
+            threshold_ratio = total_pending / VALUE_REQUIRE
+            logger.info(f"🎯 THRESHOLD EXCEEDED: {total_pending:.2f} USDT >= {VALUE_REQUIRE} USDT")
+            logger.info(f"📊 Threshold ratio: {threshold_ratio:.2f}x ({threshold_ratio*100:.1f}%)")
+            logger.info(f"🔢 Trade composition: {len(trades)} BUY trades over {time_in_window}s window")
 
             # Calculate aggregated values
             total_quantity = sum(trade['quantity'] for trade in trades)
             avg_price = total_pending / total_quantity if total_quantity > 0 else 0
             latest_timestamp = max(trade['timestamp'] for trade in trades)
 
+            # Comprehensive validation of aggregated trades
+            validation_passed, buy_volume, sell_volume = validate_buy_volume_aggregation(
+                trades, total_pending, f"{exchange} aggregated alert"
+            )
+
+            if not validation_passed:
+                logger.error(f"❌ VALIDATION FAILED for aggregated alert - proceeding with corrected values")
+                total_pending = buy_volume  # Use only buy volume
+
             # Debug logging for aggregation calculation verification
-            logger.debug(f"Aggregation calculation details for {len(trades)} trades:")
+            logger.debug(f"📊 Aggregation calculation details for {len(trades)} trades:")
             for i, trade in enumerate(trades):
-                logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT")
+                trade_side = trade.get('trade_side', 'unknown').upper()
+                logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT ({trade_side})")
             logger.debug(f"  Total: {total_quantity:.4f} XBT, Total Value: {total_pending:.2f} USDT")
             logger.debug(f"  Weighted Avg: {total_pending:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
 
             # Verification: Check if weighted average calculation is correct
             calculated_total = avg_price * total_quantity
             if abs(calculated_total - total_pending) > 0.01:  # Allow small floating point differences
-                logger.error(f"AGGREGATION PRICE CALCULATION MISMATCH: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} != {total_pending:.2f}")
+                logger.error(f"❌ AGGREGATION PRICE CALCULATION MISMATCH: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} != {total_pending:.2f}")
             else:
-                logger.debug(f"Aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_pending:.2f}")
+                logger.debug(f"✅ Aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_pending:.2f}")
 
-            # Send the alert
+            # Send the alert with trade details
             await send_alert(
                 avg_price,
                 total_quantity,
@@ -1772,7 +2000,8 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
                 f"{exchange} (Aggregated)",
                 latest_timestamp,
                 trades[0]['exchange_url'],
-                len(trades)
+                len(trades),
+                trades  # Pass trade details for breakdown
             )
         else:
             logger.info(f"Aggregation window expired: {time_in_window}s >= {aggregation_window}s, total: {total_pending:.2f} USDT < {VALUE_REQUIRE} USDT")
@@ -1842,7 +2071,7 @@ async def process_aggregated_trades():
 
                     logger.info(f"Processing expired aggregated trades: {len(trades)} trades, {total_quantity} XBT, {total_value} USDT")
 
-                    # Send the alert
+                    # Send the alert with trade details
                     await send_alert(
                         avg_price,
                         total_quantity,
@@ -1850,7 +2079,8 @@ async def process_aggregated_trades():
                         f"{exchange} (Aggregated)",
                         latest_timestamp,
                         trades[0]['exchange_url'],
-                        len(trades)
+                        len(trades),
+                        trades  # Pass trade details for breakdown
                     )
                 else:
                     logger.info(f"Expired aggregated trades below threshold: {total_value} USDT < {VALUE_REQUIRE} USDT")
@@ -1868,18 +2098,73 @@ def validate_price_calculation(price, quantity, sum_value, context="Unknown"):
     tolerance = max(0.01, expected_value * 0.001)  # 0.1% tolerance or 0.01 USDT minimum
 
     if abs(sum_value - expected_value) > tolerance:
-        logger.error(f"PRICE CALCULATION VALIDATION FAILED in {context}:")
-        logger.error(f"  Price: {price:.6f} USDT")
-        logger.error(f"  Quantity: {quantity:.4f} XBT")
-        logger.error(f"  Expected Value: {expected_value:.2f} USDT")
-        logger.error(f"  Actual Value: {sum_value:.2f} USDT")
-        logger.error(f"  Difference: {sum_value - expected_value:.2f} USDT")
-        logger.error(f"  Tolerance: {tolerance:.2f} USDT")
+        logger.error(f"❌ PRICE CALCULATION VALIDATION FAILED in {context}:")
+        logger.error(f"  💵 Price: {price:.6f} USDT")
+        logger.error(f"  📊 Quantity: {quantity:.4f} XBT")
+        logger.error(f"  ✅ Expected Value: {expected_value:.2f} USDT")
+        logger.error(f"  ❌ Actual Value: {sum_value:.2f} USDT")
+        logger.error(f"  📉 Difference: {sum_value - expected_value:.2f} USDT")
+        logger.error(f"  🎯 Tolerance: {tolerance:.2f} USDT")
         return False, expected_value
 
+    logger.debug(f"✅ Price calculation validated in {context}: {price:.6f} * {quantity:.4f} = {sum_value:.2f} USDT")
     return True, sum_value
 
-async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1):
+def validate_buy_volume_aggregation(trades_list, expected_total, context="Unknown"):
+    """Validate that buy volume aggregation is correct and excludes sell trades."""
+    buy_trades = []
+    sell_trades = []
+    unknown_trades = []
+
+    for trade in trades_list:
+        trade_side = trade.get('trade_side', 'unknown').lower()
+        if trade_side in ['buy', 'b']:
+            buy_trades.append(trade)
+        elif trade_side in ['sell', 's']:
+            sell_trades.append(trade)
+        else:
+            unknown_trades.append(trade)
+
+    # Calculate volumes
+    buy_volume = sum(t['sum_value'] for t in buy_trades)
+    sell_volume = sum(t['sum_value'] for t in sell_trades)
+    unknown_volume = sum(t['sum_value'] for t in unknown_trades)
+    total_volume = buy_volume + sell_volume + unknown_volume
+
+    # Log detailed breakdown
+    logger.info(f"📊 BUY VOLUME VALIDATION for {context}:")
+    logger.info(f"  🟢 BUY trades: {len(buy_trades)} trades = ${buy_volume:.2f} USDT")
+    logger.info(f"  🔴 SELL trades: {len(sell_trades)} trades = ${sell_volume:.2f} USDT")
+    logger.info(f"  ⚪ UNKNOWN trades: {len(unknown_trades)} trades = ${unknown_volume:.2f} USDT")
+    logger.info(f"  💰 Total volume: ${total_volume:.2f} USDT")
+    logger.info(f"  🎯 Expected total: ${expected_total:.2f} USDT")
+
+    # Validation checks
+    validation_passed = True
+
+    # Check if sell trades are incorrectly included
+    if sell_trades:
+        logger.error(f"❌ SELL TRADES DETECTED: {len(sell_trades)} sell trades should not be included in buy volume!")
+        validation_passed = False
+
+    # Check total calculation
+    if abs(total_volume - expected_total) > 0.01:
+        logger.error(f"❌ VOLUME CALCULATION MISMATCH: {total_volume:.2f} != {expected_total:.2f}")
+        validation_passed = False
+
+    # Check individual trade calculations
+    for i, trade in enumerate(buy_trades[:5]):  # Check first 5 trades
+        expected_trade_value = trade['price'] * trade['quantity']
+        if abs(trade['sum_value'] - expected_trade_value) > 0.01:
+            logger.error(f"❌ TRADE {i+1} CALCULATION ERROR: {trade['sum_value']:.2f} != {expected_trade_value:.2f}")
+            validation_passed = False
+
+    if validation_passed:
+        logger.info(f"✅ Buy volume aggregation validated: ${buy_volume:.2f} USDT from {len(buy_trades)} BUY trades")
+
+    return validation_passed, buy_volume, sell_volume
+
+async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1, trade_details=None):
     """Send an alert to all active chats with robust error handling and fallback."""
     global PHOTO
 
@@ -1890,8 +2175,17 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         sum_value = corrected_value  # Use corrected value for the alert
 
     # Enhanced logging for alert processing
-    logger.info(f"🚨 ALERT TRIGGERED: {quantity:.2f} XBT at ${price:.6f} = ${sum_value:.2f} USDT from {exchange}")
+    logger.info(f"🚨 ALERT TRIGGERED: {quantity:.4f} XBT at ${price:.6f} = ${sum_value:.2f} USDT from {exchange}")
     logger.info(f"📊 Alert details: {num_trades} trade(s), threshold: ${VALUE_REQUIRE} USDT")
+
+    # Log individual trade details if provided
+    if trade_details and len(trade_details) > 1:
+        logger.info(f"📋 Individual trade breakdown:")
+        for i, trade in enumerate(trade_details[:5]):  # Log first 5 trades
+            trade_side = trade.get('trade_side', 'unknown').upper()
+            logger.info(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ ${trade['price']:.6f} = ${trade['sum_value']:.2f} USDT ({trade_side})")
+        if len(trade_details) > 5:
+            logger.info(f"  ... and {len(trade_details) - 5} more trades")
 
     # Get a random image for this alert with enhanced error handling
     random_photo = None
@@ -1906,18 +2200,39 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         logger.warning(f"Image loading failed, will use text-only alert: {image_load_error}")
         random_photo = None
 
-    # Get market data for additional context
+    # Get comprehensive market data for additional context
     try:
-        market_data = await get_nonkyc_ticker()
+        # Fetch real-time prices for both trading pairs
+        market_data_usdt = await get_nonkyc_ticker()  # XBT/USDT
         volume_data = await calculate_combined_volume_periods()
         volume_periods = volume_data["combined"]
 
-        market_cap = market_data.get("marketcapNumber", 0) if market_data else 0
-        current_price = market_data.get("lastPriceNumber", price) if market_data else price
+        # Get current prices for both pairs
+        current_price_usdt = market_data_usdt.get("lastPriceNumber", price) if market_data_usdt else price
+        market_cap = market_data_usdt.get("marketcapNumber", 0) if market_data_usdt else 0
+
+        # Try to get XBT/BTC price (this would need a separate API call for BTC pair)
+        # For now, estimate based on BTC price (this should be improved with actual API call)
+        try:
+            # Rough estimation: if current trade price is very small (< 1), it might be BTC pair
+            if price < 1.0:
+                current_price_btc = price  # This is already in BTC
+                # Convert to USDT for comparison (estimate BTC at $100k)
+                btc_usd_estimate = 100000
+                current_price_usdt_from_btc = current_price_btc * btc_usd_estimate
+            else:
+                current_price_btc = current_price_usdt / 100000  # Rough conversion
+                current_price_usdt_from_btc = current_price_usdt
+        except:
+            current_price_btc = 0
+            current_price_usdt_from_btc = current_price_usdt
+
     except Exception as e:
         logger.warning(f"Could not fetch market data for alert: {e}")
         market_cap = 0
-        current_price = price
+        current_price_usdt = price
+        current_price_btc = 0
+        current_price_usdt_from_btc = price
         volume_periods = {"15m": 0, "1h": 0, "4h": 0, "24h": 0}
 
     # Format the message
@@ -1961,17 +2276,50 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     message = (
         f"{magnitude_indicator}\n\n"
         f"{alert_text}\n\n"
-        f"💰 <b>Amount:</b> {quantity:.2f} XBT\n"
-        f"💵 <b>Price:</b> {price:.6f} USDT\n"
+        f"💰 <b>Amount:</b> {quantity:.4f} XBT\n"
+        f"💵 <b>Trade Price:</b> {price:.6f} USDT\n"
         f"💲 <b>Total Value:</b> {sum_value:.2f} USDT\n"
         f"🏦 <b>Exchange:</b> {exchange}\n"
     )
 
     # Add number of trades if it's an aggregated alert
     if num_trades > 1:
-        message += f"🔄 <b>Trades:</b> {num_trades}\n"
+        message += f"🔄 <b>Trades:</b> {num_trades} BUY orders\n"
 
     message += f"⏰ <b>Time:</b> {formatted_time}\n"
+
+    # Add individual buy order details for aggregated alerts
+    if trade_details and len(trade_details) > 1:
+        message += f"\n📋 <b>Aggregated Buy Orders:</b>\n"
+
+        # Display individual orders (up to 5)
+        orders_to_show = min(5, len(trade_details))
+        for i in range(orders_to_show):
+            trade = trade_details[i]
+            message += f"Order {i+1}: {trade['quantity']:.4f} XBT at {trade['price']:.6f} USDT\n"
+
+        # If more than 5 orders, aggregate the remaining ones
+        if len(trade_details) > 5:
+            remaining_trades = trade_details[5:]
+            remaining_quantity = sum(t['quantity'] for t in remaining_trades)
+            remaining_count = len(remaining_trades)
+            message += f"Orders 6-{len(trade_details)}: {remaining_quantity:.4f} XBT total ({remaining_count} additional orders)\n"
+
+        # Add summary calculations
+        message += f"\n📊 <b>Summary:</b>\n"
+        message += f"Average Price: {price:.6f} USDT\n"
+        message += f"Total Volume: {quantity:.4f} XBT\n"
+        message += f"Total Value: {sum_value:.2f} USDT\n"
+
+    # Add real-time price information
+    message += f"\n📊 <b>Current Market Prices:</b>\n"
+    if current_price_usdt > 0:
+        price_change_usdt = ((current_price_usdt - price) / price) * 100 if price > 0 else 0
+        price_change_emoji = "📈" if price_change_usdt >= 0 else "📉"
+        message += f"💵 XBT/USDT: ${current_price_usdt:.6f} {price_change_emoji} ({price_change_usdt:+.2f}%)\n"
+
+    if current_price_btc > 0:
+        message += f"₿ XBT/BTC: {current_price_btc:.8f} BTC\n"
 
     # Add market data if available
     if market_cap > 0:
@@ -2901,7 +3249,7 @@ async def check_price(update: Update, context: CallbackContext) -> None:
         f"📊 <b>24h Statistics:</b>\n"
         f"📈 <b>High:</b> ${high_24h:.6f}\n"
         f"📉 <b>Low:</b> ${low_24h:.6f}\n"
-        f"💹 <b>Volume:</b> {volume_24h_xbt:,.0f} XBT (${volume_24h_usdt:,.0f})\n\n"
+        f"💹 <b>Volume:</b> {volume_24h_xbt:,.4f} XBT (${volume_24h_usdt:,.0f})\n\n"
 
         f"📈 <b>Combined Volume (NonKYC + CoinEx):</b>\n"
         f"🕐 <b>15m:</b> ${volume_periods['15m']:,.0f}\n"
@@ -4532,7 +4880,7 @@ async def test_command(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(
             f"✅ <b>Test Complete!</b>\n\n"
             f"Simulated trade:\n"
-            f"💰 Amount: {simulated_quantity:.2f} XBT\n"
+            f"💰 Amount: {simulated_quantity:.4f} XBT\n"
             f"💵 Price: ${simulated_price:.6f}\n"
             f"💲 Value: ${simulated_value:.2f} USDT\n"
             f"🎯 Threshold: ${VALUE_REQUIRE} USDT",
