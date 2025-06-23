@@ -1106,8 +1106,9 @@ async def process_orderbook_update(params):
 
                     if new_quantity == 0:
                         # Price level completely removed (swept)
-                        swept_asks.append({"price": price_float, "quantity": old_quantity})
-                        total_swept_value += price_float * old_quantity
+                        individual_value = price_float * old_quantity
+                        swept_asks.append({"price": price_float, "quantity": old_quantity, "value": individual_value})
+                        total_swept_value += individual_value
                         logger.debug(f"Ask level swept: {price_float:.6f} USDT, {old_quantity} XBT")
                         # Remove from current orderbook
                         CURRENT_ORDERBOOK["asks"].pop(i)
@@ -1115,8 +1116,9 @@ async def process_orderbook_update(params):
                     elif new_quantity < old_quantity:
                         # Partial fill
                         filled_quantity = old_quantity - new_quantity
-                        swept_asks.append({"price": price_float, "quantity": filled_quantity})
-                        total_swept_value += price_float * filled_quantity
+                        individual_value = price_float * filled_quantity
+                        swept_asks.append({"price": price_float, "quantity": filled_quantity, "value": individual_value})
+                        total_swept_value += individual_value
                         logger.debug(f"Ask level partially filled: {price_float:.6f} USDT, {filled_quantity} XBT")
                         # Update current orderbook
                         CURRENT_ORDERBOOK["asks"][i][1] = str(new_quantity)
@@ -1145,6 +1147,24 @@ async def process_orderbook_update(params):
 
         # Enhanced logging for debugging
         logger.info(f"Potential sweep detected: {total_quantity:.4f} XBT, avg price: {avg_price:.6f} USDT, total value: {total_swept_value:.2f} USDT")
+
+        # Debug logging for price calculation verification
+        logger.debug(f"Sweep calculation details:")
+        for i, ask in enumerate(swept_asks):
+            stored_value = ask.get("value", ask["price"] * ask["quantity"])  # Use stored value if available
+            calculated_value = ask["price"] * ask["quantity"]
+            logger.debug(f"  Ask {i+1}: {ask['quantity']:.4f} XBT @ {ask['price']:.6f} USDT = {stored_value:.2f} USDT")
+            if abs(stored_value - calculated_value) > 0.01:
+                logger.warning(f"    Value mismatch: stored={stored_value:.2f}, calculated={calculated_value:.2f}")
+        logger.debug(f"  Total: {total_quantity:.4f} XBT, Total Value: {total_swept_value:.2f} USDT")
+        logger.debug(f"  Weighted Avg: {total_swept_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
+
+        # Verification: Check if weighted average calculation is correct
+        calculated_total = avg_price * total_quantity
+        if abs(calculated_total - total_swept_value) > 0.01:  # Allow small floating point differences
+            logger.error(f"PRICE CALCULATION MISMATCH: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} != {total_swept_value:.2f}")
+        else:
+            logger.debug(f"Price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_swept_value:.2f}")
 
         # Validate price is reasonable for XBT (Bitcoin Classic)
         # For USDT pairs: max $100k, for BTC pairs: max 10 BTC
@@ -1689,6 +1709,13 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
             'window_start': current_time
         }
 
+    # Validate individual trade calculation before adding to pending trades
+    expected_sum_value = price * quantity
+    if abs(sum_value - expected_sum_value) > 0.01:  # Allow small floating point differences
+        logger.error(f"TRADE VALUE CALCULATION MISMATCH: {price:.6f} * {quantity:.4f} = {expected_sum_value:.2f} != {sum_value:.2f}")
+        logger.error(f"Using corrected value: {expected_sum_value:.2f} USDT")
+        sum_value = expected_sum_value  # Use the corrected value
+
     PENDING_TRADES[exchange][buyer_id]['trades'].append({
         'price': price,
         'quantity': quantity,
@@ -1696,7 +1723,8 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
         'timestamp': timestamp,
         'exchange': exchange,
         'exchange_url': exchange_url,
-        'received_time': current_time
+        'received_time': current_time,
+        'validated': True  # Mark as validated
     })
 
     # Log the pending trades for this buyer
@@ -1721,6 +1749,20 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
             total_quantity = sum(trade['quantity'] for trade in trades)
             avg_price = total_pending / total_quantity if total_quantity > 0 else 0
             latest_timestamp = max(trade['timestamp'] for trade in trades)
+
+            # Debug logging for aggregation calculation verification
+            logger.debug(f"Aggregation calculation details for {len(trades)} trades:")
+            for i, trade in enumerate(trades):
+                logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT")
+            logger.debug(f"  Total: {total_quantity:.4f} XBT, Total Value: {total_pending:.2f} USDT")
+            logger.debug(f"  Weighted Avg: {total_pending:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
+
+            # Verification: Check if weighted average calculation is correct
+            calculated_total = avg_price * total_quantity
+            if abs(calculated_total - total_pending) > 0.01:  # Allow small floating point differences
+                logger.error(f"AGGREGATION PRICE CALCULATION MISMATCH: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} != {total_pending:.2f}")
+            else:
+                logger.debug(f"Aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_pending:.2f}")
 
             # Send the alert
             await send_alert(
@@ -1784,6 +1826,20 @@ async def process_aggregated_trades():
                     avg_price = total_value / total_quantity if total_quantity > 0 else 0
                     latest_timestamp = max(trade['timestamp'] for trade in trades)
 
+                    # Debug logging for expired aggregation calculation verification
+                    logger.debug(f"Expired aggregation calculation details for {len(trades)} trades:")
+                    for i, trade in enumerate(trades):
+                        logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT")
+                    logger.debug(f"  Total: {total_quantity:.4f} XBT, Total Value: {total_value:.2f} USDT")
+                    logger.debug(f"  Weighted Avg: {total_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
+
+                    # Verification: Check if weighted average calculation is correct
+                    calculated_total = avg_price * total_quantity
+                    if abs(calculated_total - total_value) > 0.01:  # Allow small floating point differences
+                        logger.error(f"EXPIRED AGGREGATION PRICE CALCULATION MISMATCH: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} != {total_value:.2f}")
+                    else:
+                        logger.debug(f"Expired aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_value:.2f}")
+
                     logger.info(f"Processing expired aggregated trades: {len(trades)} trades, {total_quantity} XBT, {total_value} USDT")
 
                     # Send the alert
@@ -1806,9 +1862,32 @@ async def process_aggregated_trades():
                 if not PENDING_TRADES[exchange]:
                     del PENDING_TRADES[exchange]
 
+def validate_price_calculation(price, quantity, sum_value, context="Unknown"):
+    """Validate that price * quantity = sum_value within acceptable tolerance."""
+    expected_value = price * quantity
+    tolerance = max(0.01, expected_value * 0.001)  # 0.1% tolerance or 0.01 USDT minimum
+
+    if abs(sum_value - expected_value) > tolerance:
+        logger.error(f"PRICE CALCULATION VALIDATION FAILED in {context}:")
+        logger.error(f"  Price: {price:.6f} USDT")
+        logger.error(f"  Quantity: {quantity:.4f} XBT")
+        logger.error(f"  Expected Value: {expected_value:.2f} USDT")
+        logger.error(f"  Actual Value: {sum_value:.2f} USDT")
+        logger.error(f"  Difference: {sum_value - expected_value:.2f} USDT")
+        logger.error(f"  Tolerance: {tolerance:.2f} USDT")
+        return False, expected_value
+
+    return True, sum_value
+
 async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1):
     """Send an alert to all active chats with robust error handling and fallback."""
     global PHOTO
+
+    # Validate the alert calculation before sending
+    is_valid, corrected_value = validate_price_calculation(price, quantity, sum_value, f"Alert from {exchange}")
+    if not is_valid:
+        logger.warning(f"Alert calculation corrected: {sum_value:.2f} -> {corrected_value:.2f} USDT")
+        sum_value = corrected_value  # Use corrected value for the alert
 
     # Enhanced logging for alert processing
     logger.info(f"🚨 ALERT TRIGGERED: {quantity:.2f} XBT at ${price:.6f} = ${sum_value:.2f} USDT from {exchange}")
@@ -1934,21 +2013,33 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
             # Attempt image delivery first
             if random_photo:
                 try:
-                    # Enhanced image type detection
-                    is_gif = False
+                    # Enhanced image type detection for animations (GIF and MP4)
+                    is_animation = False
                     image_filename = ""
 
                     if hasattr(random_photo, 'name'):
                         image_filename = random_photo.name
-                        is_gif = image_filename.lower().endswith('.gif')
+                        # Check for both GIF and MP4 (converted GIF) files
+                        is_animation = (image_filename.lower().endswith('.gif') or
+                                      image_filename.lower().endswith('.mp4'))
                     elif isinstance(random_photo, str):
                         image_filename = random_photo
-                        is_gif = image_filename.lower().endswith('.gif')
+                        # Check for both GIF and MP4 (converted GIF) files
+                        is_animation = (image_filename.lower().endswith('.gif') or
+                                      image_filename.lower().endswith('.mp4'))
 
-                    logger.info(f"🖼️ Attempting to send {'GIF animation' if is_gif else 'static image'}: {image_filename}")
+                        # Also check file type detection for MP4 files
+                        try:
+                            detected_type = detect_file_type(image_filename)
+                            if detected_type == 'mp4':
+                                is_animation = True
+                        except:
+                            pass  # If detection fails, rely on extension check
 
-                    if is_gif:
-                        # Use send_animation for GIF files to preserve animation
+                    logger.info(f"🖼️ Attempting to send {'animation' if is_animation else 'static image'}: {image_filename}")
+
+                    if is_animation:
+                        # Use send_animation for GIF and MP4 files to preserve animation
                         await bot.send_animation(
                             chat_id=chat_id,
                             animation=random_photo,
@@ -1958,7 +2049,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
                             read_timeout=30,
                             write_timeout=30
                         )
-                        logger.info(f"✅ Alert with GIF animation sent successfully to chat {chat_id}")
+                        logger.info(f"✅ Alert with animation sent successfully to chat {chat_id}")
                     else:
                         # Use send_photo for static images
                         await bot.send_photo(
