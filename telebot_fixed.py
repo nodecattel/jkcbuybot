@@ -1478,6 +1478,11 @@ async def nonkyc_websocket_btc():
     # Track last transaction timestamp for BTC pair
     last_trans_btc = int(time.time() * 1000)
 
+    # Cache BTC/USDT rate and refresh periodically
+    btc_rate = None
+    last_rate_update = 0
+    rate_update_interval = 300  # Update BTC rate every 5 minutes
+
     while running:
         websocket = None
         try:
@@ -1501,6 +1506,18 @@ async def nonkyc_websocket_btc():
             # Process messages
             while running:
                 try:
+                    # Update BTC rate periodically
+                    current_time = time.time()
+                    if current_time - last_rate_update > rate_update_interval or btc_rate is None:
+                        from api_clients import get_btc_usdt_rate
+                        btc_rate = await get_btc_usdt_rate()
+                        last_rate_update = current_time
+                        if btc_rate:
+                            logger.debug(f"Updated BTC/USDT rate: ${btc_rate:.2f}")
+                        else:
+                            logger.warning("Failed to update BTC/USDT rate - using fallback")
+                            btc_rate = 65000.0  # Conservative fallback rate
+
                     response = json.loads(await asyncio.wait_for(websocket.recv(), timeout=5))
 
                     # Log all messages in debug mode
@@ -1522,29 +1539,37 @@ async def nonkyc_websocket_btc():
                                 # Extract trade side (buy/sell) - check multiple possible field names
                                 trade_side = trade_data.get("side", trade_data.get("type", trade_data.get("takerSide", "unknown"))).lower()
 
-                                # Convert BTC price to USDT for comparison (estimate BTC at $100k)
-                                btc_usd_estimate = 100000  # This should be fetched from an API in production
-                                price_usdt_estimate = price_btc * btc_usd_estimate
-                                sum_value = price_usdt_estimate * quantity
+                                # Convert BTC price to USDT using real-time rate
+                                if btc_rate:
+                                    from api_clients import convert_btc_to_usdt
+                                    price_usdt_estimate, _ = await convert_btc_to_usdt(price_btc, btc_rate)
+                                    sum_value = price_usdt_estimate * quantity
 
-                                # Log trade details for debugging
-                                logger.debug(f"NonKYC BTC trade: {quantity:.4f} XBT at {price_btc:.8f} BTC ({price_usdt_estimate:.2f} USDT), side: {trade_side}, value: {sum_value:.2f} USDT")
+                                    # Log trade details for debugging
+                                    logger.debug(f"NonKYC BTC trade: {quantity:.4f} XBT at {price_btc:.8f} BTC (${price_usdt_estimate:.6f} USDT equivalent), side: {trade_side}, value: {sum_value:.2f} USDT")
+                                else:
+                                    logger.warning("Cannot process XBT/BTC trade: BTC/USDT rate unavailable")
+                                    continue
 
                                 # Only process BUY trades newer than the last one
                                 if timestamp > last_trans_btc and trade_side in ["buy", "b"]:
                                     last_trans_btc = timestamp
 
-                                    logger.info(f"✅ Processing BUY trade: {quantity:.4f} XBT at {price_btc:.8f} BTC = {sum_value:.2f} USDT")
+                                    logger.info(f"✅ Processing XBT/BTC BUY trade: {quantity:.4f} XBT at {price_btc:.8f} BTC (≈ ${price_usdt_estimate:.6f} USDT) = ${sum_value:.2f} USDT equivalent")
 
-                                    # Process the trade with side information
+                                    # Process the trade with BTC pair information
                                     await process_message(
-                                        price=price_usdt_estimate,
+                                        price=price_btc,  # Use original BTC price
                                         quantity=quantity,
-                                        sum_value=sum_value,
+                                        sum_value=price_btc * quantity,  # BTC sum value
                                         exchange="NonKYC Exchange (XBT/BTC)",
                                         timestamp=timestamp,
                                         exchange_url="https://nonkyc.io/market/XBT_BTC",
-                                        trade_side=trade_side
+                                        trade_side=trade_side,
+                                        pair_type="XBT/BTC",
+                                        usdt_price=price_usdt_estimate,
+                                        usdt_sum_value=sum_value,
+                                        btc_rate=btc_rate
                                     )
                                 elif timestamp > last_trans_btc and trade_side in ["sell", "s"]:
                                     # Update timestamp but don't process sell trades for alerts
@@ -1858,12 +1883,21 @@ async def ascendex_websocket():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
-async def process_message(price, quantity, sum_value, exchange, timestamp, exchange_url, trade_side="buy"):
+async def process_message(price, quantity, sum_value, exchange, timestamp, exchange_url, trade_side="buy",
+                         pair_type="XBT/USDT", usdt_price=None, usdt_sum_value=None, btc_rate=None):
     """Process a trade message and send notification if it meets criteria."""
     global PHOTO, PENDING_TRADES, LAST_AGGREGATION_CHECK
 
-    # Log all trades for debugging with side information
-    logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} XBT at {price} USDT (Total: {sum_value} USDT)")
+    # Determine if this is a BTC pair and format logging appropriately
+    is_btc_pair = pair_type == "XBT/BTC"
+
+    if is_btc_pair:
+        # For BTC pairs, log both BTC and USDT equivalent values
+        usdt_equiv_text = f" (≈ ${usdt_price:.6f} USDT)" if usdt_price else ""
+        logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} XBT at {price:.8f} BTC{usdt_equiv_text} (Total: {sum_value:.8f} BTC)")
+    else:
+        # For USDT pairs, use standard logging
+        logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} XBT at ${price:.6f} USDT (Total: ${sum_value:.2f} USDT)")
 
     # Additional validation: Only process buy trades for alerts
     if trade_side.lower() not in ["buy", "b", "unknown"]:
@@ -1886,18 +1920,21 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
             logger.info(f"Trade below threshold: {sum_value} USDT < {VALUE_REQUIRE} USDT")
         return
 
-    # For aggregation, we'll use a simpler approach - just aggregate by exchange within the time window
-    # Use a single aggregation key per exchange to catch all trades together
+    # For aggregation, separate by trading pair to prevent mixing XBT/USDT and XBT/BTC
     current_time = int(time.time())
-    buyer_id = f"{exchange}_current"  # Use a simple key per exchange
+    buyer_id = f"{exchange}_{pair_type}_current"  # Include pair type in key
 
     # Initialize exchange dict if not exists
     if exchange not in PENDING_TRADES:
         PENDING_TRADES[exchange] = {}
 
+    # Initialize pair dict if not exists
+    if pair_type not in PENDING_TRADES[exchange]:
+        PENDING_TRADES[exchange][pair_type] = {}
+
     # Add trade to pending trades (regardless of individual threshold)
-    if buyer_id not in PENDING_TRADES[exchange]:
-        PENDING_TRADES[exchange][buyer_id] = {
+    if buyer_id not in PENDING_TRADES[exchange][pair_type]:
+        PENDING_TRADES[exchange][pair_type][buyer_id] = {
             'trades': [],
             'window_start': current_time
         }
@@ -1909,7 +1946,7 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
         logger.error(f"Using corrected value: {expected_sum_value:.2f} USDT")
         sum_value = expected_sum_value  # Use the corrected value
 
-    PENDING_TRADES[exchange][buyer_id]['trades'].append({
+    PENDING_TRADES[exchange][pair_type][buyer_id]['trades'].append({
         'price': price,
         'quantity': quantity,
         'sum_value': sum_value,
@@ -1918,11 +1955,15 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
         'exchange_url': exchange_url,
         'trade_side': trade_side,
         'received_time': current_time,
-        'validated': True  # Mark as validated
+        'validated': True,  # Mark as validated
+        'pair_type': pair_type,
+        'usdt_price': usdt_price,
+        'usdt_sum_value': usdt_sum_value,
+        'btc_rate': btc_rate
     })
 
     # Log the pending trades for this buyer with enhanced validation
-    trades_list = PENDING_TRADES[exchange][buyer_id]['trades']
+    trades_list = PENDING_TRADES[exchange][pair_type][buyer_id]['trades']
     total_pending = sum(t['sum_value'] for t in trades_list)
     trade_count = len(trades_list)
 
@@ -1933,11 +1974,34 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
     buy_volume = sum(t['sum_value'] for t in buy_trades)
     sell_volume = sum(t['sum_value'] for t in sell_trades)
 
-    logger.info(f"📊 Pending trades for {buyer_id}: {trade_count} total trades")
-    logger.info(f"  🟢 BUY trades: {len(buy_trades)} trades = ${buy_volume:.2f} USDT")
+    # Format logging based on pair type
+    if is_btc_pair:
+        currency_symbol = "BTC"
+        buy_formatted = f"{buy_volume:.8f}"
+        sell_formatted = f"{sell_volume:.8f}"
+        total_formatted = f"{total_pending:.8f}"
+        threshold_formatted = f"{VALUE_REQUIRE:.2f}"  # Threshold is always in USDT
+    else:
+        currency_symbol = "USDT"
+        buy_formatted = f"{buy_volume:.2f}"
+        sell_formatted = f"{sell_volume:.2f}"
+        total_formatted = f"{total_pending:.2f}"
+        threshold_formatted = f"{VALUE_REQUIRE:.2f}"
+
+    logger.info(f"📊 Pending trades for {buyer_id} ({pair_type}): {trade_count} total trades")
+    logger.info(f"  🟢 BUY trades: {len(buy_trades)} trades = {buy_formatted} {currency_symbol}")
     if sell_trades:
-        logger.warning(f"  🔴 SELL trades detected: {len(sell_trades)} trades = ${sell_volume:.2f} USDT (should be filtered out!)")
-    logger.info(f"  💰 Total pending: ${total_pending:.2f} USDT (threshold: ${VALUE_REQUIRE} USDT)")
+        logger.warning(f"  🔴 SELL trades detected: {len(sell_trades)} trades = {sell_formatted} {currency_symbol} (should be filtered out!)")
+
+    # For threshold comparison, always use USDT equivalent
+    if is_btc_pair and usdt_sum_value:
+        total_usdt_equivalent = sum(t.get('usdt_sum_value', 0) for t in buy_trades)
+        logger.info(f"  💰 Total pending: {total_formatted} {currency_symbol} (≈ ${total_usdt_equivalent:.2f} USDT equivalent)")
+        logger.info(f"  🎯 Threshold: ${threshold_formatted} USDT")
+        threshold_sum_value = total_usdt_equivalent
+    else:
+        logger.info(f"  💰 Total pending: ${total_formatted} {currency_symbol} (threshold: ${threshold_formatted} USDT)")
+        threshold_sum_value = total_pending
 
     # Mathematical validation of aggregation
     calculated_total = sum(t['price'] * t['quantity'] for t in trades_list)
@@ -1947,30 +2011,41 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
         logger.debug(f"✅ Aggregation calculation verified: ${total_pending:.2f} USDT")
 
     # Check if we should process this aggregation immediately
-    window_start = PENDING_TRADES[exchange][buyer_id]['window_start']
+    window_start = PENDING_TRADES[exchange][pair_type][buyer_id]['window_start']
     time_in_window = current_time - window_start
 
     # Process if either threshold is met OR window time has elapsed
-    should_process = (total_pending >= VALUE_REQUIRE) or (time_in_window >= aggregation_window)
+    should_process = (threshold_sum_value >= VALUE_REQUIRE) or (time_in_window >= aggregation_window)
 
     if should_process:
-        trades = PENDING_TRADES[exchange][buyer_id]['trades']
+        trades = PENDING_TRADES[exchange][pair_type][buyer_id]['trades']
 
-        if total_pending >= VALUE_REQUIRE:
+        if threshold_sum_value >= VALUE_REQUIRE:
             # Enhanced threshold validation logging
-            threshold_ratio = total_pending / VALUE_REQUIRE
-            logger.info(f"🎯 THRESHOLD EXCEEDED: {total_pending:.2f} USDT >= {VALUE_REQUIRE} USDT")
+            threshold_ratio = threshold_sum_value / VALUE_REQUIRE
+            logger.info(f"🎯 THRESHOLD EXCEEDED: ${threshold_sum_value:.2f} USDT equivalent >= ${VALUE_REQUIRE:.2f} USDT")
             logger.info(f"📊 Threshold ratio: {threshold_ratio:.2f}x ({threshold_ratio*100:.1f}%)")
-            logger.info(f"🔢 Trade composition: {len(trades)} BUY trades over {time_in_window}s window")
+            logger.info(f"🔢 Trade composition: {len(trades)} BUY trades over {time_in_window}s window ({pair_type})")
 
             # Calculate aggregated values
             total_quantity = sum(trade['quantity'] for trade in trades)
             avg_price = total_pending / total_quantity if total_quantity > 0 else 0
             latest_timestamp = max(trade['timestamp'] for trade in trades)
 
+            # For BTC pairs, also calculate USDT equivalent aggregated values
+            if is_btc_pair:
+                total_usdt_sum = sum(trade.get('usdt_sum_value', 0) for trade in trades)
+                avg_usdt_price = total_usdt_sum / total_quantity if total_quantity > 0 else 0
+                btc_rate_used = trades[0].get('btc_rate') if trades else None
+            else:
+                total_usdt_sum = total_pending
+                avg_usdt_price = avg_price
+                btc_rate_used = None
+
             # Comprehensive validation of aggregated trades
-            validation_passed, buy_volume, sell_volume = validate_buy_volume_aggregation(
-                trades, total_pending, f"{exchange} aggregated alert"
+            from utils import validate_buy_sell_aggregation
+            validation_passed, buy_volume, sell_volume = validate_buy_sell_aggregation(
+                trades, f"{exchange} {pair_type} aggregated alert"
             )
 
             if not validation_passed:
@@ -1993,21 +2068,43 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
                 logger.debug(f"✅ Aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_pending:.2f}")
 
             # Send the alert with trade details
-            await send_alert(
-                avg_price,
-                total_quantity,
-                total_pending,
-                f"{exchange} (Aggregated)",
-                latest_timestamp,
-                trades[0]['exchange_url'],
-                len(trades),
-                trades  # Pass trade details for breakdown
-            )
+            if is_btc_pair:
+                # For BTC pairs, pass both BTC and USDT values
+                await send_alert(
+                    avg_price,  # BTC price
+                    total_quantity,
+                    total_pending,  # BTC sum value
+                    f"{exchange} (Aggregated)",
+                    latest_timestamp,
+                    trades[0]['exchange_url'],
+                    len(trades),
+                    trades,  # Pass trade details for breakdown
+                    pair_type="XBT/BTC",
+                    usdt_price=avg_usdt_price,
+                    usdt_sum_value=total_usdt_sum,
+                    btc_rate=btc_rate_used
+                )
+            else:
+                # For USDT pairs, use standard call
+                await send_alert(
+                    avg_price,
+                    total_quantity,
+                    total_pending,
+                    f"{exchange} (Aggregated)",
+                    latest_timestamp,
+                    trades[0]['exchange_url'],
+                    len(trades),
+                    trades  # Pass trade details for breakdown
+                )
         else:
             logger.info(f"Aggregation window expired: {time_in_window}s >= {aggregation_window}s, total: {total_pending:.2f} USDT < {VALUE_REQUIRE} USDT")
 
         # Clear the processed trades
-        del PENDING_TRADES[exchange][buyer_id]
+        del PENDING_TRADES[exchange][pair_type][buyer_id]
+
+        # If the pair dict is now empty, remove it
+        if not PENDING_TRADES[exchange][pair_type]:
+            del PENDING_TRADES[exchange][pair_type]
 
         # If the exchange dict is now empty, remove it
         if not PENDING_TRADES[exchange]:
@@ -2164,12 +2261,16 @@ def validate_buy_volume_aggregation(trades_list, expected_total, context="Unknow
 
     return validation_passed, buy_volume, sell_volume
 
-async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1, trade_details=None):
+async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1, trade_details=None,
+                     pair_type="XBT/USDT", usdt_price=None, usdt_sum_value=None, btc_rate=None):
     """Send an alert to all active chats with robust error handling and fallback."""
     global PHOTO
 
+    # Determine pair type for validation
+    pair_currency = "BTC" if pair_type == "XBT/BTC" else "USDT"
+
     # Validate the alert calculation before sending
-    is_valid, corrected_value = validate_price_calculation(price, quantity, sum_value, f"Alert from {exchange}")
+    is_valid, corrected_value = validate_price_calculation(price, quantity, sum_value, f"Alert from {exchange}", pair_currency)
     if not is_valid:
         logger.warning(f"Alert calculation corrected: {sum_value:.2f} -> {corrected_value:.2f} USDT")
         sum_value = corrected_value  # Use corrected value for the alert
@@ -2212,20 +2313,26 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         market_cap = market_data_usdt.get("marketcapNumber", 0) if market_data_usdt else 0
 
         # Try to get XBT/BTC price (this would need a separate API call for BTC pair)
-        # For now, estimate based on BTC price (this should be improved with actual API call)
+        # Get real-time BTC rate for accurate conversion
         try:
-            # Rough estimation: if current trade price is very small (< 1), it might be BTC pair
+            from api_clients import get_btc_usdt_rate
+            btc_rate = await get_btc_usdt_rate()
+            if not btc_rate:
+                btc_rate = 65000.0  # Conservative fallback
+
+            # Determine pair type and convert appropriately
             if price < 1.0:
-                current_price_btc = price  # This is already in BTC
-                # Convert to USDT for comparison (estimate BTC at $100k)
-                btc_usd_estimate = 100000
-                current_price_usdt_from_btc = current_price_btc * btc_usd_estimate
+                # This is likely a BTC pair
+                current_price_btc = price
+                current_price_usdt_from_btc = current_price_btc * btc_rate
             else:
-                current_price_btc = current_price_usdt / 100000  # Rough conversion
-                current_price_usdt_from_btc = current_price_usdt
-        except:
+                # This is likely a USDT pair
+                current_price_btc = price / btc_rate
+                current_price_usdt_from_btc = price
+        except Exception as e:
+            logger.warning(f"Error getting BTC rate for price conversion: {e}")
             current_price_btc = 0
-            current_price_usdt_from_btc = current_price_usdt
+            current_price_usdt_from_btc = price if price >= 1.0 else 0
 
     except Exception as e:
         logger.warning(f"Could not fetch market data for alert: {e}")
@@ -2273,14 +2380,30 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         alert_text = alert_text.replace("Transaction", "Sweep Buy")
         alert_text = alert_text.replace("Buy", "Sweep Buy")
 
-    message = (
-        f"{magnitude_indicator}\n\n"
-        f"{alert_text}\n\n"
-        f"💰 <b>Amount:</b> {quantity:.4f} XBT\n"
-        f"💵 <b>Trade Price:</b> {price:.6f} USDT\n"
-        f"💲 <b>Total Value:</b> {sum_value:.2f} USDT\n"
-        f"🏦 <b>Exchange:</b> {exchange}\n"
-    )
+    # Format message based on trading pair
+    if pair_type == "XBT/BTC":
+        # For BTC pairs, show both BTC and USDT equivalent values
+        message = (
+            f"{magnitude_indicator}\n\n"
+            f"{alert_text}\n\n"
+            f"💰 <b>Amount:</b> {quantity:.4f} XBT\n"
+            f"₿ <b>Trade Price:</b> {price:.8f} BTC\n"
+            f"💵 <b>USDT Equivalent:</b> ≈ ${usdt_price:.6f} USDT\n" if usdt_price else ""
+            f"💲 <b>Total Value:</b> {sum_value:.8f} BTC\n"
+            f"💵 <b>USDT Equivalent:</b> ≈ ${usdt_sum_value:.2f} USDT\n" if usdt_sum_value else ""
+            f"🏦 <b>Exchange:</b> {exchange}\n"
+            f"📈 <b>BTC Rate:</b> ${btc_rate:.2f} USDT\n" if btc_rate else ""
+        )
+    else:
+        # For USDT pairs, use standard formatting
+        message = (
+            f"{magnitude_indicator}\n\n"
+            f"{alert_text}\n\n"
+            f"💰 <b>Amount:</b> {quantity:.4f} XBT\n"
+            f"💵 <b>Trade Price:</b> ${price:.6f} USDT\n"
+            f"💲 <b>Total Value:</b> ${sum_value:.2f} USDT\n"
+            f"🏦 <b>Exchange:</b> {exchange}\n"
+        )
 
     # Add number of trades if it's an aggregated alert
     if num_trades > 1:
@@ -2296,7 +2419,16 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         orders_to_show = min(5, len(trade_details))
         for i in range(orders_to_show):
             trade = trade_details[i]
-            message += f"Order {i+1}: {trade['quantity']:.4f} XBT at {trade['price']:.6f} USDT\n"
+            if pair_type == "XBT/BTC":
+                # Format for BTC pairs with USDT equivalent
+                usdt_equiv = trade.get('usdt_price', 0)
+                if usdt_equiv:
+                    message += f"Order {i+1}: {trade['quantity']:.4f} XBT at {trade['price']:.8f} BTC (≈ ${usdt_equiv:.6f} USDT)\n"
+                else:
+                    message += f"Order {i+1}: {trade['quantity']:.4f} XBT at {trade['price']:.8f} BTC\n"
+            else:
+                # Format for USDT pairs
+                message += f"Order {i+1}: {trade['quantity']:.4f} XBT at ${trade['price']:.6f} USDT\n"
 
         # If more than 5 orders, aggregate the remaining ones
         if len(trade_details) > 5:
@@ -2307,9 +2439,18 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
 
         # Add summary calculations
         message += f"\n📊 <b>Summary:</b>\n"
-        message += f"Average Price: {price:.6f} USDT\n"
-        message += f"Total Volume: {quantity:.4f} XBT\n"
-        message += f"Total Value: {sum_value:.2f} USDT\n"
+        if pair_type == "XBT/BTC":
+            message += f"Average Price: {price:.8f} BTC\n"
+            if usdt_price:
+                message += f"USDT Equivalent: ≈ ${usdt_price:.6f} USDT\n"
+            message += f"Total Volume: {quantity:.4f} XBT\n"
+            message += f"Total Value: {sum_value:.8f} BTC\n"
+            if usdt_sum_value:
+                message += f"USDT Equivalent: ≈ ${usdt_sum_value:.2f} USDT\n"
+        else:
+            message += f"Average Price: ${price:.6f} USDT\n"
+            message += f"Total Volume: {quantity:.4f} XBT\n"
+            message += f"Total Value: ${sum_value:.2f} USDT\n"
 
     # Add real-time price information
     message += f"\n📊 <b>Current Market Prices:</b>\n"
