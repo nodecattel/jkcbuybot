@@ -282,9 +282,9 @@ def validate_buy_sell_aggregation(trades: list, context: str = "Unknown") -> Tup
     is_btc_pair = pair_type == "XBT/BTC"
     currency_symbol = "BTC" if is_btc_pair else "USDT"
 
-    # Separate buy and sell trades
-    buy_trades = [t for t in trades if t.get('side', '').lower() in ['buy', 'b']]
-    sell_trades = [t for t in trades if t.get('side', '').lower() in ['sell', 's']]
+    # Separate buy and sell trades - use correct field name 'trade_side'
+    buy_trades = [t for t in trades if t.get('trade_side', '').lower() in ['buy', 'b', 'unknown']]
+    sell_trades = [t for t in trades if t.get('trade_side', '').lower() in ['sell', 's']]
 
     # Calculate volumes using original currency values
     buy_volume = sum(t.get('sum_value', 0) for t in buy_trades)

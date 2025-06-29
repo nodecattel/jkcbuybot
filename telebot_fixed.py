@@ -2027,9 +2027,22 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
             logger.info(f"📊 Threshold ratio: {threshold_ratio:.2f}x ({threshold_ratio*100:.1f}%)")
             logger.info(f"🔢 Trade composition: {len(trades)} BUY trades over {time_in_window}s window ({pair_type})")
 
-            # Calculate aggregated values
+            # Comprehensive validation of aggregated trades FIRST
+            from utils import validate_buy_sell_aggregation
+            validation_passed, buy_volume, sell_volume = validate_buy_sell_aggregation(
+                trades, f"{exchange} {pair_type} aggregated alert"
+            )
+
+            # Use corrected volume if validation failed
+            if not validation_passed:
+                logger.error(f"❌ VALIDATION FAILED for aggregated alert - using only BUY volume")
+                corrected_total_value = buy_volume  # Use only buy volume
+            else:
+                corrected_total_value = total_pending  # Use original total
+
+            # Calculate aggregated values using corrected total
             total_quantity = sum(trade['quantity'] for trade in trades)
-            avg_price = total_pending / total_quantity if total_quantity > 0 else 0
+            avg_price = corrected_total_value / total_quantity if total_quantity > 0 else 0
             latest_timestamp = max(trade['timestamp'] for trade in trades)
 
             # For BTC pairs, also calculate USDT equivalent aggregated values
@@ -2038,42 +2051,32 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
                 avg_usdt_price = total_usdt_sum / total_quantity if total_quantity > 0 else 0
                 btc_rate_used = trades[0].get('btc_rate') if trades else None
             else:
-                total_usdt_sum = total_pending
+                total_usdt_sum = corrected_total_value
                 avg_usdt_price = avg_price
                 btc_rate_used = None
-
-            # Comprehensive validation of aggregated trades
-            from utils import validate_buy_sell_aggregation
-            validation_passed, buy_volume, sell_volume = validate_buy_sell_aggregation(
-                trades, f"{exchange} {pair_type} aggregated alert"
-            )
-
-            if not validation_passed:
-                logger.error(f"❌ VALIDATION FAILED for aggregated alert - proceeding with corrected values")
-                total_pending = buy_volume  # Use only buy volume
 
             # Debug logging for aggregation calculation verification
             logger.debug(f"📊 Aggregation calculation details for {len(trades)} trades:")
             for i, trade in enumerate(trades):
                 trade_side = trade.get('trade_side', 'unknown').upper()
                 logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT ({trade_side})")
-            logger.debug(f"  Total: {total_quantity:.4f} XBT, Total Value: {total_pending:.2f} USDT")
-            logger.debug(f"  Weighted Avg: {total_pending:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
+            logger.debug(f"  Total: {total_quantity:.4f} XBT, Corrected Value: {corrected_total_value:.2f} USDT")
+            logger.debug(f"  Weighted Avg: {corrected_total_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
 
             # Verification: Check if weighted average calculation is correct
             calculated_total = avg_price * total_quantity
-            if abs(calculated_total - total_pending) > 0.01:  # Allow small floating point differences
-                logger.error(f"❌ AGGREGATION PRICE CALCULATION MISMATCH: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} != {total_pending:.2f}")
+            if abs(calculated_total - corrected_total_value) > 0.01:  # Allow small floating point differences
+                logger.error(f"❌ AGGREGATION PRICE CALCULATION MISMATCH: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} != {corrected_total_value:.2f}")
             else:
-                logger.debug(f"✅ Aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_pending:.2f}")
+                logger.debug(f"✅ Aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {corrected_total_value:.2f}")
 
-            # Send the alert with trade details
+            # Send the alert with trade details using corrected values
             if is_btc_pair:
                 # For BTC pairs, pass both BTC and USDT values
                 await send_alert(
                     avg_price,  # BTC price
                     total_quantity,
-                    total_pending,  # BTC sum value
+                    corrected_total_value,  # Corrected BTC sum value
                     f"{exchange} (Aggregated)",
                     latest_timestamp,
                     trades[0]['exchange_url'],
@@ -2089,7 +2092,7 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
                 await send_alert(
                     avg_price,
                     total_quantity,
-                    total_pending,
+                    corrected_total_value,  # Corrected USDT sum value
                     f"{exchange} (Aggregated)",
                     latest_timestamp,
                     trades[0]['exchange_url'],

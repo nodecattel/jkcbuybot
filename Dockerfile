@@ -39,15 +39,20 @@ RUN mkdir -p /app/logs /app/images && \
 
 # Copy application files
 COPY telebot_fixed.py .
+COPY alert_system.py .
+COPY api_clients.py .
+COPY config.py .
+COPY image_manager.py .
+COPY permissions.py .
+COPY telegram_handlers.py .
+COPY utils.py .
+COPY websocket_handlers.py .
 COPY config.json .
 COPY xbt_buy_alert.gif .
-COPY nonkyc_integration_template.py .
+COPY xbtbuy.GIF .
 
 # Copy pre-populated image collection
 COPY --chown=xbtbot:xbtbot images/ ./images/
-
-# Copy test files (useful for health checks)
-COPY test_*.py ./
 
 # Set proper permissions including image collection
 RUN chown -R xbtbot:xbtbot /app && \

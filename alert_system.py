@@ -224,8 +224,8 @@ async def process_aggregated_trades():
                     # Validate buy/sell aggregation
                     validation_passed, buy_volume, sell_volume = validate_buy_sell_aggregation(trades, f"{exchange} {pair_type} aggregation")
 
-                    # Use USDT equivalent for threshold checking
-                    buy_threshold_volume = sum(trade['threshold_sum_value'] for trade in trades if trade.get('side', '').lower() in ['buy', 'b', 'unknown'])
+                    # Use USDT equivalent for threshold checking - use correct field name 'trade_side'
+                    buy_threshold_volume = sum(trade['threshold_sum_value'] for trade in trades if trade.get('trade_side', '').lower() in ['buy', 'b', 'unknown'])
 
                     if validation_passed and buy_threshold_volume >= value_require:
                         logger.info(f"Sending aggregated alert: {exchange} {pair_type} - {len(trades)} trades, {format_quantity(total_quantity)} XBT, ${buy_threshold_volume:.2f} USDT equivalent")
