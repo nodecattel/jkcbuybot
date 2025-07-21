@@ -23,6 +23,7 @@ import pandas as pd
 import gzip
 import zlib
 import traceback
+from utils import validate_price_calculation
 
 # Set up logging with more detailed format
 logging.basicConfig(
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Add a file handler to save logs
-file_handler = logging.FileHandler("xbt_telebot.log")
+file_handler = logging.FileHandler("jkc_telebot.log")
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(file_handler)
 
@@ -46,7 +47,7 @@ def setup_file_logging():
     
     # Create a file handler with current timestamp
     current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = os.path.join("logs", f"xbt_telebot_{current_time}.log")
+    log_file = os.path.join("logs", f"jkc_telebot_{current_time}.log")
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
     file_handler.setLevel(logging.INFO)
@@ -82,7 +83,7 @@ def load_config():
             "active_chat_ids": [],
             "bot_owner": 0,
             "by_pass": 0,
-            "image_path": "xbt_buy_alert.gif",
+            "image_path": "jkc_buy_alert.gif",
             "dynamic_threshold": {
                 "enabled": True,
                 "base_value": 300,
@@ -279,8 +280,8 @@ IMAGES_DIR = "images"
 SUPPORTED_IMAGE_FORMATS = [".png", ".jpg", ".jpeg", ".gif", ".mp4", ".webp"]
 
 # Transaction timestamps
-LAST_TRANS_KYC = int(time.time() * 1000)
-LAST_TRANS_COINEX = LAST_TRANS_KYC
+LAST_TRANS_JKC = int(time.time() * 1000)
+LAST_TRANS_COINEX = LAST_TRANS_JKC
 LAST_TRANS_ASENDEX = 0
 PHOTO = None
 USER_CHECK_PRICE = []
@@ -400,8 +401,9 @@ async def can_use_admin_commands(update: Update, context: CallbackContext) -> bo
     if int(user_id) == int(BOT_OWNER):
         return True
 
-    # For the public supergroup (-1002471264202), restrict admin commands to owner only
-    if chat_id == -1002471264202:
+    # For public supergroups, restrict admin commands to owner only
+    public_supergroups = CONFIG.get("public_supergroups", [])
+    if chat_id in public_supergroups:
         logger.info(f"Public supergroup access: User {user_id} requesting admin command - denied (owner only)")
         return False
 
@@ -499,9 +501,9 @@ def get_random_image():
         # Try multiple possible default image paths
         default_paths = [
             IMAGE_PATH,  # From config
-            "xbtbuy.GIF",  # Actual file name
-            "xbt_buy_alert.gif",  # Config file name
-            os.path.join(os.getcwd(), "xbtbuy.GIF"),  # Full path
+            "jkcbuy.GIF",  # Actual file name
+            "jkc_buy_alert.gif",  # Config file name
+            os.path.join(os.getcwd(), "jkcbuy.GIF"),  # Full path
         ]
 
         for path in default_paths:
@@ -563,7 +565,7 @@ async def get_nonkyc_ticker():
             ticker_msg = {
                 "method": "getMarket",
                 "params": {
-                    "symbol": "XBT/USDT"
+                    "symbol": "JKC/USDT"
                 },
                 "id": 999
             }
@@ -600,7 +602,7 @@ async def get_nonkyc_trades():
             trades_msg = {
                 "method": "getTrades",
                 "params": {
-                    "symbol": "XBT/USDT",
+                    "symbol": "JKC/USDT",
                     "limit": 1000,
                     "sort": "DESC"
                 },
@@ -637,7 +639,7 @@ async def get_coinex_trades():
         # CoinEx v2 API for historical trades
         url = "https://api.coinex.com/v2/spot/deals"
         params = {
-            "market": "XBTUSDT",
+            "market": "JKCUSDT",
             "limit": 1000  # Get last 1000 trades
         }
 
@@ -668,7 +670,7 @@ async def get_coinex_ticker():
         # CoinEx v2 API for ticker data
         url = "https://api.coinex.com/v2/spot/ticker"
         params = {
-            "market": "XBTUSDT"
+            "market": "JKCUSDT"
         }
 
         response = requests.get(url, params=params, timeout=10)
@@ -682,7 +684,7 @@ async def get_coinex_ticker():
         return None
 
 async def get_livecoinwatch_data():
-    """Get Bitcoin Classic data from LiveCoinWatch API with comprehensive error handling."""
+    """Get JunkCoin data from LiveCoinWatch API with comprehensive error handling."""
     try:
         import requests
         url = "https://api.livecoinwatch.com/coins/single"
@@ -690,9 +692,9 @@ async def get_livecoinwatch_data():
             "content-type": "application/json",
             "x-api-key": "4646e0ac-da16-4526-b196-c0cd70d84501"
         }
-        payload = {"currency": "USD", "code": "_XBT", "meta": True}
+        payload = {"currency": "USD", "code": "JKC", "meta": True}
 
-        logger.debug("Making request to LiveCoinWatch API for XBT data")
+        logger.debug("Making request to LiveCoinWatch API for JKC data")
         response = requests.post(url, json=payload, headers=headers, timeout=10)
 
         # Log API usage for rate limiting awareness
@@ -713,7 +715,7 @@ async def get_livecoinwatch_data():
                 elif error_code == 401:
                     logger.error("LiveCoinWatch API authentication failed - check API key")
                 elif error_code == 404:
-                    logger.error("LiveCoinWatch API: XBT coin not found")
+                    logger.error("LiveCoinWatch API: JKC coin not found")
 
                 return None
 
@@ -723,7 +725,7 @@ async def get_livecoinwatch_data():
             if missing_fields:
                 logger.warning(f"LiveCoinWatch API response missing fields: {missing_fields}")
 
-            logger.info(f"Successfully fetched XBT data from LiveCoinWatch: ${data.get('rate', 'N/A')}")
+            logger.info(f"Successfully fetched JKC data from LiveCoinWatch: ${data.get('rate', 'N/A')}")
             return data
 
         elif response.status_code == 429:
@@ -733,7 +735,7 @@ async def get_livecoinwatch_data():
             logger.error("LiveCoinWatch API authentication failed - check API key")
             return None
         elif response.status_code == 404:
-            logger.error("LiveCoinWatch API: XBT coin not found")
+            logger.error("LiveCoinWatch API: JKC coin not found")
             return None
         else:
             logger.warning(f"LiveCoinWatch API returned unexpected status {response.status_code}: {response.text[:200]}")
@@ -753,24 +755,24 @@ async def get_livecoinwatch_data():
         return None
 
 async def check_exchange_availability():
-    """Check if XBT is available on various exchanges and update availability flags."""
+    """Check if JKC is available on various exchanges and update availability flags."""
     global EXCHANGE_AVAILABILITY, LAST_AVAILABILITY_CHECK
 
     current_time = time.time()
     if current_time - LAST_AVAILABILITY_CHECK < AVAILABILITY_CHECK_INTERVAL:
         return EXCHANGE_AVAILABILITY
 
-    logger.debug("Checking XBT availability across exchanges...")
+    logger.debug("Checking JKC availability across exchanges...")
 
     # Check NonKYC
     try:
         response = requests.get("https://api.nonkyc.io/api/v2/markets", timeout=10)
         if response.status_code == 200:
             markets = response.json()
-            xbt_markets = [m for m in markets if m.get('base') == 'XBT']
-            EXCHANGE_AVAILABILITY["nonkyc"] = len(xbt_markets) > 0
+            jkc_markets = [m for m in markets if m.get('base') == 'JKC']
+            EXCHANGE_AVAILABILITY["nonkyc"] = len(jkc_markets) > 0
             if EXCHANGE_AVAILABILITY["nonkyc"]:
-                logger.info(f"XBT now available on NonKYC! Found {len(xbt_markets)} markets")
+                logger.info(f"JKC now available on NonKYC! Found {len(jkc_markets)} markets")
         else:
             EXCHANGE_AVAILABILITY["nonkyc"] = False
     except Exception as e:
@@ -779,20 +781,20 @@ async def check_exchange_availability():
 
     # Check CoinEx
     try:
-        response = requests.get("https://api.coinex.com/v1/market/ticker?market=XBTUSDT", timeout=10)
+        response = requests.get("https://api.coinex.com/v1/market/ticker?market=JKCUSDT", timeout=10)
         EXCHANGE_AVAILABILITY["coinex"] = response.status_code == 200
         if EXCHANGE_AVAILABILITY["coinex"]:
-            logger.info("XBT now available on CoinEx!")
+            logger.info("JKC now available on CoinEx!")
     except Exception as e:
         logger.debug(f"Error checking CoinEx availability: {e}")
         EXCHANGE_AVAILABILITY["coinex"] = False
 
     # Check AscendEX
     try:
-        response = requests.get("https://ascendex.com/api/pro/v1/ticker?symbol=XBT/USDT", timeout=10)
+        response = requests.get("https://ascendex.com/api/pro/v1/ticker?symbol=JKC/USDT", timeout=10)
         EXCHANGE_AVAILABILITY["ascendex"] = response.status_code == 200
         if EXCHANGE_AVAILABILITY["ascendex"]:
-            logger.info("XBT now available on AscendEX!")
+            logger.info("JKC now available on AscendEX!")
     except Exception as e:
         logger.debug(f"Error checking AscendEX availability: {e}")
         EXCHANGE_AVAILABILITY["ascendex"] = False
@@ -802,9 +804,9 @@ async def check_exchange_availability():
     # Log availability status
     available_exchanges = [ex for ex, available in EXCHANGE_AVAILABILITY.items() if available]
     if available_exchanges:
-        logger.info(f"XBT available on: {', '.join(available_exchanges)}")
+        logger.info(f"JKC available on: {', '.join(available_exchanges)}")
     else:
-        logger.debug("XBT not yet available on any monitored exchanges")
+        logger.debug("JKC not yet available on any monitored exchanges")
 
     return EXCHANGE_AVAILABILITY
 
@@ -884,14 +886,14 @@ async def calculate_volume_periods(trades_data):
                 if trade_side in ["buy", "b"]:
                     trade_value = price * quantity
                     period_volume += trade_value
-                    logger.debug(f"Including BUY trade in {period_name} volume: {quantity:.4f} XBT @ {price:.6f} = {trade_value:.2f} USDT")
+                    logger.debug(f"Including BUY trade in {period_name} volume: {quantity:.4f} JKC @ {price:.6f} = {trade_value:.2f} USDT")
                 elif trade_side in ["sell", "s"]:
-                    logger.debug(f"Excluding SELL trade from {period_name} volume: {quantity:.4f} XBT @ {price:.6f}")
+                    logger.debug(f"Excluding SELL trade from {period_name} volume: {quantity:.4f} JKC @ {price:.6f}")
                 else:
                     # For unknown trades, include them but log warning
                     trade_value = price * quantity
                     period_volume += trade_value
-                    logger.debug(f"Including UNKNOWN side trade in {period_name} volume: {quantity:.4f} XBT @ {price:.6f} = {trade_value:.2f} USDT")
+                    logger.debug(f"Including UNKNOWN side trade in {period_name} volume: {quantity:.4f} JKC @ {price:.6f} = {trade_value:.2f} USDT")
 
         volumes[period_name] = round(period_volume, 2)
 
@@ -1011,7 +1013,7 @@ async def get_nonkyc_orderbook():
             subscribe_msg = {
                 "method": "subscribeOrderbook",
                 "params": {
-                    "symbol": "XBT/USDT",
+                    "symbol": "JKC/USDT",
                     "limit": 50  # Smaller limit for faster processing
                 },
                 "id": 777
@@ -1055,14 +1057,14 @@ async def nonkyc_orderbook_websocket():
     global running, CURRENT_ORDERBOOK, ORDERBOOK_SEQUENCE, EXCHANGE_AVAILABILITY
     uri = "wss://ws.nonkyc.io"
 
-    # Wait for XBT to become available on NonKYC
+    # Wait for JKC to become available on NonKYC
     while running:
         await check_exchange_availability()
         if EXCHANGE_AVAILABILITY["nonkyc"]:
-            logger.info("XBT detected on NonKYC - starting orderbook WebSocket for sweep detection")
+            logger.info("JKC detected on NonKYC - starting orderbook WebSocket for sweep detection")
             break
         else:
-            logger.debug("XBT not yet available on NonKYC for orderbook - waiting...")
+            logger.debug("JKC not yet available on NonKYC for orderbook - waiting...")
             await asyncio.sleep(60)  # Check every minute
             continue
 
@@ -1082,13 +1084,13 @@ async def nonkyc_orderbook_websocket():
             subscribe_msg = {
                 "method": "subscribeOrderbook",
                 "params": {
-                    "symbol": "XBT/USDT",
+                    "symbol": "JKC/USDT",
                     "limit": 20  # Only need top 20 levels for sweep detection
                 },
                 "id": 888
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.info("Subscribed to XBT/USDT orderbook updates")
+            logger.info("Subscribed to JKC/USDT orderbook updates")
 
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -1181,7 +1183,7 @@ async def process_orderbook_update(params):
                         individual_value = price_float * old_quantity
                         swept_asks.append({"price": price_float, "quantity": old_quantity, "value": individual_value})
                         total_swept_value += individual_value
-                        logger.debug(f"Ask level swept: {price_float:.6f} USDT, {old_quantity:.4f} XBT")
+                        logger.debug(f"Ask level swept: {price_float:.6f} USDT, {old_quantity:.4f} JKC")
                         # Remove from current orderbook
                         CURRENT_ORDERBOOK["asks"].pop(i)
 
@@ -1191,7 +1193,7 @@ async def process_orderbook_update(params):
                         individual_value = price_float * filled_quantity
                         swept_asks.append({"price": price_float, "quantity": filled_quantity, "value": individual_value})
                         total_swept_value += individual_value
-                        logger.debug(f"Ask level partially filled: {price_float:.6f} USDT, {filled_quantity:.4f} XBT")
+                        logger.debug(f"Ask level partially filled: {price_float:.6f} USDT, {filled_quantity:.4f} JKC")
                         # Update current orderbook
                         CURRENT_ORDERBOOK["asks"][i][1] = str(new_quantity)
 
@@ -1218,18 +1220,18 @@ async def process_orderbook_update(params):
         min_sweep_threshold = 5.0  # Minimum $5 USDT value to consider as a sweep
 
         # Enhanced logging for debugging
-        logger.info(f"Potential sweep detected: {total_quantity:.4f} XBT, avg price: {avg_price:.6f} USDT, total value: {total_swept_value:.2f} USDT")
+        logger.info(f"Potential sweep detected: {total_quantity:.4f} JKC, avg price: {avg_price:.6f} USDT, total value: {total_swept_value:.2f} USDT")
 
         # Debug logging for price calculation verification
         logger.debug(f"Sweep calculation details:")
         for i, ask in enumerate(swept_asks):
             stored_value = ask.get("value", ask["price"] * ask["quantity"])  # Use stored value if available
             calculated_value = ask["price"] * ask["quantity"]
-            logger.debug(f"  Ask {i+1}: {ask['quantity']:.4f} XBT @ {ask['price']:.6f} USDT = {stored_value:.2f} USDT")
+            logger.debug(f"  Ask {i+1}: {ask['quantity']:.4f} JKC @ {ask['price']:.6f} USDT = {stored_value:.2f} USDT")
             if abs(stored_value - calculated_value) > 0.01:
                 logger.warning(f"    Value mismatch: stored={stored_value:.2f}, calculated={calculated_value:.2f}")
-        logger.debug(f"  Total: {total_quantity:.4f} XBT, Total Value: {total_swept_value:.2f} USDT")
-        logger.debug(f"  Weighted Avg: {total_swept_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
+        logger.debug(f"  Total: {total_quantity:.4f} JKC, Total Value: {total_swept_value:.2f} USDT")
+        logger.debug(f"  Weighted Avg: {total_swept_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per JKC")
 
         # Verification: Check if weighted average calculation is correct
         calculated_total = avg_price * total_quantity
@@ -1238,7 +1240,7 @@ async def process_orderbook_update(params):
         else:
             logger.debug(f"Price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_swept_value:.2f}")
 
-        # Validate price is reasonable for XBT (Bitcoin Classic)
+        # Validate price is reasonable for JKC (JunkCoin)
         # For USDT pairs: max $100k, for BTC pairs: max 10 BTC
         max_price_usdt = 100000.0
         max_price_btc = 10.0
@@ -1254,7 +1256,7 @@ async def process_orderbook_update(params):
             return  # Don't process this sweep
 
         if total_swept_value >= min_sweep_threshold and avg_price <= max_price:
-            logger.info(f"Valid orderbook sweep detected: {total_quantity:.4f} XBT at avg {avg_price:.6f} USDT (Total: {total_swept_value:.2f} USDT)")
+            logger.info(f"Valid orderbook sweep detected: {total_quantity:.4f} JKC at avg {avg_price:.6f} USDT (Total: {total_swept_value:.2f} USDT)")
 
             # Process through normal pipeline
             timestamp = int(time.time() * 1000)
@@ -1264,7 +1266,7 @@ async def process_orderbook_update(params):
                 sum_value=total_swept_value,
                 exchange="NonKYC (Orderbook Sweep)",
                 timestamp=timestamp,
-                exchange_url="https://nonkyc.io/market/XBT_USDT",
+                exchange_url="https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3",
                 trade_side="buy"  # Orderbook sweeps removing asks are buy orders
             )
         else:
@@ -1326,18 +1328,18 @@ async def safe_websocket_connect(uri, timeout=10):
         raise
 
 async def nonkyc_websocket_usdt():
-    """Connect to NonKYC WebSocket API and process XBT/USDT trade data."""
-    global LAST_TRANS_KYC, running, EXCHANGE_AVAILABILITY
+    """Connect to NonKYC WebSocket API and process JKC/USDT trade data."""
+    global LAST_TRANS_JKC, running, EXCHANGE_AVAILABILITY
     uri = "wss://ws.nonkyc.io"
 
-    # Wait for XBT to become available on NonKYC
+    # Wait for JKC to become available on NonKYC
     while running:
         await check_exchange_availability()
         if EXCHANGE_AVAILABILITY["nonkyc"]:
-            logger.info("XBT detected on NonKYC - starting USDT WebSocket connection")
+            logger.info("JKC detected on NonKYC - starting USDT WebSocket connection")
             break
         else:
-            logger.debug("XBT not yet available on NonKYC - waiting...")
+            logger.debug("JKC not yet available on NonKYC - waiting...")
             await asyncio.sleep(60)  # Check every minute
             continue
     
@@ -1351,16 +1353,16 @@ async def nonkyc_websocket_usdt():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to NonKYC WebSocket at {uri}")
             
-            # Subscribe to XBT/USDT trades
+            # Subscribe to JKC/USDT trades
             subscribe_msg = {
                 "method": "subscribeTrades",
                 "params": {
-                    "symbol": "XBT/USDT"
+                    "symbol": "JKC/USDT"
                 },
                 "id": 1
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/USDT trades on NonKYC")
+            logger.debug("Subscribed to JKC/USDT trades on NonKYC")
             
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -1391,40 +1393,40 @@ async def nonkyc_websocket_usdt():
                                 trade_side = trade_data.get("side", trade_data.get("type", trade_data.get("takerSide", "unknown"))).lower()
 
                                 # Log trade details for debugging
-                                logger.debug(f"NonKYC USDT trade: {quantity:.4f} XBT at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
+                                logger.debug(f"NonKYC USDT trade: {quantity:.4f} JKC at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
 
                                 # Only process BUY trades newer than the last one
-                                if timestamp > LAST_TRANS_KYC and trade_side in ["buy", "b"]:
-                                    LAST_TRANS_KYC = timestamp
+                                if timestamp > LAST_TRANS_JKC and trade_side in ["buy", "b"]:
+                                    LAST_TRANS_JKC = timestamp
 
-                                    logger.info(f"✅ Processing BUY trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                    logger.info(f"✅ Processing BUY trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
 
                                     # Process the trade with side information
                                     await process_message(
                                         price=price,
                                         quantity=quantity,
                                         sum_value=sum_value,
-                                        exchange="NonKYC Exchange (XBT/USDT)",
+                                        exchange="NonKYC Exchange (JKC/USDT)",
                                         timestamp=timestamp,
-                                        exchange_url="https://nonkyc.io/market/XBT_USDT",
+                                        exchange_url="https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3",
                                         trade_side=trade_side
                                     )
-                                elif timestamp > LAST_TRANS_KYC and trade_side in ["sell", "s"]:
+                                elif timestamp > LAST_TRANS_JKC and trade_side in ["sell", "s"]:
                                     # Update timestamp but don't process sell trades for alerts
-                                    LAST_TRANS_KYC = timestamp
-                                    logger.debug(f"⏭️ Skipping SELL trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                    LAST_TRANS_JKC = timestamp
+                                    logger.debug(f"⏭️ Skipping SELL trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
                                 elif trade_side == "unknown":
                                     logger.warning(f"⚠️ Unknown trade side for NonKYC USDT trade: {trade_data}")
                                     # Process unknown trades to maintain backward compatibility, but log warning
-                                    if timestamp > LAST_TRANS_KYC:
-                                        LAST_TRANS_KYC = timestamp
+                                    if timestamp > LAST_TRANS_JKC:
+                                        LAST_TRANS_JKC = timestamp
                                         await process_message(
                                             price=price,
                                             quantity=quantity,
                                             sum_value=sum_value,
-                                            exchange="NonKYC Exchange (XBT/USDT)",
+                                            exchange="NonKYC Exchange (JKC/USDT)",
                                             timestamp=timestamp,
-                                            exchange_url="https://nonkyc.io/market/XBT_USDT",
+                                            exchange_url="https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3",
                                             trade_side="unknown"
                                         )
                     
@@ -1455,181 +1457,21 @@ async def nonkyc_websocket_usdt():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
-async def nonkyc_websocket_btc():
-    """Connect to NonKYC WebSocket API and process XBT/BTC trade data."""
-    global running, EXCHANGE_AVAILABILITY
-    uri = "wss://ws.nonkyc.io"
-
-    # Wait for XBT to become available on NonKYC
-    while running:
-        await check_exchange_availability()
-        if EXCHANGE_AVAILABILITY["nonkyc"]:
-            logger.info("XBT detected on NonKYC - starting BTC WebSocket connection")
-            break
-        else:
-            logger.debug("XBT not yet available on NonKYC for BTC pair - waiting...")
-            await asyncio.sleep(60)  # Check every minute
-            continue
-
-    # For exponential backoff
-    retry_delay = 5
-    max_retry_delay = 60
-
-    # Track last transaction timestamp for BTC pair
-    last_trans_btc = int(time.time() * 1000)
-
-    # Cache BTC/USDT rate and refresh periodically
-    btc_rate = None
-    last_rate_update = 0
-    rate_update_interval = 300  # Update BTC rate every 5 minutes
-
-    while running:
-        websocket = None
-        try:
-            websocket = await websockets.connect(uri, ping_interval=30)
-            logger.debug(f"Connected to NonKYC WebSocket for XBT/BTC at {uri}")
-
-            # Subscribe to XBT/BTC trades
-            subscribe_msg = {
-                "method": "subscribeTrades",
-                "params": {
-                    "symbol": "XBT/BTC"
-                },
-                "id": 3
-            }
-            await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/BTC trades on NonKYC")
-
-            # Reset retry delay on successful connection
-            retry_delay = 5
-
-            # Process messages
-            while running:
-                try:
-                    # Update BTC rate periodically
-                    current_time = time.time()
-                    if current_time - last_rate_update > rate_update_interval or btc_rate is None:
-                        from api_clients import get_btc_usdt_rate
-                        btc_rate = await get_btc_usdt_rate()
-                        last_rate_update = current_time
-                        if btc_rate:
-                            logger.debug(f"Updated BTC/USDT rate: ${btc_rate:.2f}")
-                        else:
-                            logger.warning("Failed to update BTC/USDT rate - using fallback")
-                            btc_rate = 65000.0  # Conservative fallback rate
-
-                    response = json.loads(await asyncio.wait_for(websocket.recv(), timeout=5))
-
-                    # Log all messages in debug mode
-                    if DEBUG_MODE:
-                        logger.info(f"NonKYC BTC message: {response}")
-
-                    # Process trade messages
-                    if "method" in response and response["method"] == "updateTrades":
-                        # Handle NonKYC updateTrades format
-                        if "params" in response and "data" in response["params"]:
-                            trades_data = response["params"]["data"]
-
-                            for trade_data in trades_data:
-                                # Extract trade details
-                                price_btc = float(trade_data["price"])
-                                quantity = float(trade_data["quantity"])
-                                timestamp = int(trade_data["timestampms"])  # Use timestampms for milliseconds
-
-                                # Extract trade side (buy/sell) - check multiple possible field names
-                                trade_side = trade_data.get("side", trade_data.get("type", trade_data.get("takerSide", "unknown"))).lower()
-
-                                # Convert BTC price to USDT using real-time rate
-                                if btc_rate:
-                                    from api_clients import convert_btc_to_usdt
-                                    price_usdt_estimate, _ = await convert_btc_to_usdt(price_btc, btc_rate)
-                                    sum_value = price_usdt_estimate * quantity
-
-                                    # Log trade details for debugging
-                                    logger.debug(f"NonKYC BTC trade: {quantity:.4f} XBT at {price_btc:.8f} BTC (${price_usdt_estimate:.6f} USDT equivalent), side: {trade_side}, value: {sum_value:.2f} USDT")
-                                else:
-                                    logger.warning("Cannot process XBT/BTC trade: BTC/USDT rate unavailable")
-                                    continue
-
-                                # Only process BUY trades newer than the last one
-                                if timestamp > last_trans_btc and trade_side in ["buy", "b"]:
-                                    last_trans_btc = timestamp
-
-                                    logger.info(f"✅ Processing XBT/BTC BUY trade: {quantity:.4f} XBT at {price_btc:.8f} BTC (≈ ${price_usdt_estimate:.6f} USDT) = ${sum_value:.2f} USDT equivalent")
-
-                                    # Process the trade with BTC pair information
-                                    await process_message(
-                                        price=price_btc,  # Use original BTC price
-                                        quantity=quantity,
-                                        sum_value=price_btc * quantity,  # BTC sum value
-                                        exchange="NonKYC Exchange (XBT/BTC)",
-                                        timestamp=timestamp,
-                                        exchange_url="https://nonkyc.io/market/XBT_BTC",
-                                        trade_side=trade_side,
-                                        pair_type="XBT/BTC",
-                                        usdt_price=price_usdt_estimate,
-                                        usdt_sum_value=sum_value,
-                                        btc_rate=btc_rate
-                                    )
-                                elif timestamp > last_trans_btc and trade_side in ["sell", "s"]:
-                                    # Update timestamp but don't process sell trades for alerts
-                                    last_trans_btc = timestamp
-                                    logger.debug(f"⏭️ Skipping SELL trade: {quantity:.4f} XBT at {price_btc:.8f} BTC = {sum_value:.2f} USDT")
-                                elif trade_side == "unknown":
-                                    logger.warning(f"⚠️ Unknown trade side for NonKYC BTC trade: {trade_data}")
-                                    # Process unknown trades to maintain backward compatibility, but log warning
-                                    if timestamp > last_trans_btc:
-                                        last_trans_btc = timestamp
-                                        await process_message(
-                                            price=price_usdt_estimate,
-                                            quantity=quantity,
-                                            sum_value=sum_value,
-                                            exchange="NonKYC Exchange (XBT/BTC)",
-                                            timestamp=timestamp,
-                                            exchange_url="https://nonkyc.io/market/XBT_BTC",
-                                            trade_side="unknown"
-                                        )
-
-                except asyncio.TimeoutError:
-                    # This is normal, just continue
-                    continue
-                except websockets.exceptions.ConnectionClosed:
-                    logger.warning("NonKYC BTC WebSocket connection closed")
-                    break
-                except Exception as e:
-                    logger.error(f"Error processing NonKYC BTC message: {e}")
-                    break
-
-        except Exception as e:
-            logger.error(f"Error in NonKYC BTC WebSocket connection: {e}")
-
-        finally:
-            # Clean up
-            if websocket and websocket.close_code is None:
-                await websocket.close()
-
-            # Don't retry if we're shutting down
-            if not running:
-                break
-
-            # Exponential backoff for reconnection
-            logger.info(f"Reconnecting to NonKYC BTC WebSocket in {retry_delay} seconds...")
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, max_retry_delay)
+# BTC WebSocket functionality removed - JKC only trades against USDT
 
 async def coinex_websocket():
     """Connect to CoinEx WebSocket API and process trade data."""
     global LAST_TRANS_COINEX, running, EXCHANGE_AVAILABILITY
     uri = "wss://socket.coinex.com/"
 
-    # Wait for XBT to become available on CoinEx
+    # Wait for JKC to become available on CoinEx
     while running:
         await check_exchange_availability()
         if EXCHANGE_AVAILABILITY["coinex"]:
-            logger.info("XBT detected on CoinEx - starting WebSocket connection")
+            logger.info("JKC detected on CoinEx - starting WebSocket connection")
             break
         else:
-            logger.debug("XBT not yet available on CoinEx - waiting...")
+            logger.debug("JKC not yet available on CoinEx - waiting...")
             await asyncio.sleep(60)  # Check every minute
             continue
 
@@ -1646,14 +1488,14 @@ async def coinex_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to CoinEx WebSocket at {uri}")
             
-            # Subscribe to XBT/USDT trades
+            # Subscribe to JKC/USDT trades
             subscribe_msg = {
                 "method": "deals.subscribe",
-                "params": ["XBTUSDT"],
+                "params": ["JKCUSDT"],
                 "id": 2
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/USDT trades on CoinEx")
+            logger.debug("Subscribed to JKC/USDT trades on CoinEx")
             
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -1682,13 +1524,13 @@ async def coinex_websocket():
                             trade_side = trade.get("type", trade.get("side", "unknown")).lower()
 
                             # Log trade details for debugging
-                            logger.debug(f"CoinEx trade: {quantity:.4f} XBT at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
+                            logger.debug(f"CoinEx trade: {quantity:.4f} JKC at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
 
                             # Only process BUY trades newer than the last one
                             if timestamp > LAST_TRANS_COINEX and trade_side in ["buy", "b"]:
                                 LAST_TRANS_COINEX = timestamp
 
-                                logger.info(f"✅ Processing CoinEx BUY trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                logger.info(f"✅ Processing CoinEx BUY trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
 
                                 # Process the trade with side information
                                 await process_message(
@@ -1697,13 +1539,13 @@ async def coinex_websocket():
                                     sum_value=sum_value,
                                     exchange="CoinEx Exchange",
                                     timestamp=timestamp,
-                                    exchange_url="https://www.coinex.com/exchange/XBT-USDT",
+                                    exchange_url="https://www.coinex.com/en/exchange/jkc-usdt",
                                     trade_side=trade_side
                                 )
                             elif timestamp > LAST_TRANS_COINEX and trade_side in ["sell", "s"]:
                                 # Update timestamp but don't process sell trades for alerts
                                 LAST_TRANS_COINEX = timestamp
-                                logger.debug(f"⏭️ Skipping CoinEx SELL trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                logger.debug(f"⏭️ Skipping CoinEx SELL trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
                             elif trade_side == "unknown":
                                 logger.warning(f"⚠️ Unknown trade side for CoinEx trade: {trade}")
                                 # Process unknown trades to maintain backward compatibility, but log warning
@@ -1715,7 +1557,7 @@ async def coinex_websocket():
                                         sum_value=sum_value,
                                         exchange="CoinEx Exchange",
                                         timestamp=timestamp,
-                                        exchange_url="https://www.coinex.com/exchange/XBT-USDT",
+                                        exchange_url="https://www.coinex.com/en/exchange/jkc-usdt",
                                         trade_side="unknown"
                                     )
                     
@@ -1756,14 +1598,14 @@ async def ascendex_websocket():
         logger.warning("AscendEX API keys not configured, skipping AscendEX WebSocket")
         return
 
-    # Wait for XBT to become available on AscendEX
+    # Wait for JKC to become available on AscendEX
     while running:
         await check_exchange_availability()
         if EXCHANGE_AVAILABILITY["ascendex"]:
-            logger.info("XBT detected on AscendEX - starting WebSocket connection")
+            logger.info("JKC detected on AscendEX - starting WebSocket connection")
             break
         else:
-            logger.debug("XBT not yet available on AscendEX - waiting...")
+            logger.debug("JKC not yet available on AscendEX - waiting...")
             await asyncio.sleep(60)  # Check every minute
             continue
 
@@ -1777,13 +1619,13 @@ async def ascendex_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to AscendEX WebSocket at {uri}")
             
-            # Subscribe to XBT/USDT trades
+            # Subscribe to JKC/USDT trades
             subscribe_msg = {
                 "op": "sub",
-                "ch": "trades:XBT/USDT"
+                "ch": "trades:JKC/USDT"
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/USDT trades on AscendEX")
+            logger.debug("Subscribed to JKC/USDT trades on AscendEX")
             
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -1819,13 +1661,13 @@ async def ascendex_websocket():
                                 trade_side = trade.get("side", trade.get("type", "unknown")).lower()
 
                             # Log trade details for debugging
-                            logger.debug(f"AscendEX trade: {quantity:.4f} XBT at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
+                            logger.debug(f"AscendEX trade: {quantity:.4f} JKC at {price:.6f} USDT, side: {trade_side}, value: {sum_value:.2f} USDT")
 
                             # Only process BUY trades newer than the last one
                             if timestamp > LAST_TRANS_ASENDEX and trade_side in ["buy", "b"]:
                                 LAST_TRANS_ASENDEX = timestamp
 
-                                logger.info(f"✅ Processing AscendEX BUY trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                logger.info(f"✅ Processing AscendEX BUY trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
 
                                 # Process the trade with side information
                                 await process_message(
@@ -1834,13 +1676,13 @@ async def ascendex_websocket():
                                     sum_value=sum_value,
                                     exchange="AscendEX Exchange",
                                     timestamp=timestamp,
-                                    exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/xbt",
+                                    exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/jkc",
                                     trade_side=trade_side
                                 )
                             elif timestamp > LAST_TRANS_ASENDEX and trade_side in ["sell", "s"]:
                                 # Update timestamp but don't process sell trades for alerts
                                 LAST_TRANS_ASENDEX = timestamp
-                                logger.debug(f"⏭️ Skipping AscendEX SELL trade: {quantity:.4f} XBT at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                logger.debug(f"⏭️ Skipping AscendEX SELL trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
                             elif trade_side == "unknown":
                                 logger.warning(f"⚠️ Unknown trade side for AscendEX trade: {trade}")
                                 # Process unknown trades to maintain backward compatibility, but log warning
@@ -1852,7 +1694,7 @@ async def ascendex_websocket():
                                         sum_value=sum_value,
                                         exchange="AscendEX Exchange",
                                         timestamp=timestamp,
-                                        exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/xbt",
+                                        exchange_url="https://ascendex.com/en/cashtrade-spottrading/usdt/jkc",
                                         trade_side="unknown"
                                     )
                     
@@ -1884,20 +1726,20 @@ async def ascendex_websocket():
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
 async def process_message(price, quantity, sum_value, exchange, timestamp, exchange_url, trade_side="buy",
-                         pair_type="XBT/USDT", usdt_price=None, usdt_sum_value=None, btc_rate=None):
+                         pair_type="JKC/USDT", usdt_price=None, usdt_sum_value=None, btc_rate=None):
     """Process a trade message and send notification if it meets criteria."""
     global PHOTO, PENDING_TRADES, LAST_AGGREGATION_CHECK
 
     # Determine if this is a BTC pair and format logging appropriately
-    is_btc_pair = pair_type == "XBT/BTC"
+    is_btc_pair = pair_type == "JKC/BTC"
 
     if is_btc_pair:
         # For BTC pairs, log both BTC and USDT equivalent values
         usdt_equiv_text = f" (≈ ${usdt_price:.6f} USDT)" if usdt_price else ""
-        logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} XBT at {price:.8f} BTC{usdt_equiv_text} (Total: {sum_value:.8f} BTC)")
+        logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} JKC at {price:.8f} BTC{usdt_equiv_text} (Total: {sum_value:.8f} BTC)")
     else:
         # For USDT pairs, use standard logging
-        logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} XBT at ${price:.6f} USDT (Total: ${sum_value:.2f} USDT)")
+        logger.info(f"Processing {trade_side.upper()} trade: {exchange} - {quantity} JKC at ${price:.6f} USDT (Total: ${sum_value:.2f} USDT)")
 
     # Additional validation: Only process buy trades for alerts
     if trade_side.lower() not in ["buy", "b", "unknown"]:
@@ -1920,7 +1762,7 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
             logger.info(f"Trade below threshold: {sum_value} USDT < {VALUE_REQUIRE} USDT")
         return
 
-    # For aggregation, separate by trading pair to prevent mixing XBT/USDT and XBT/BTC
+    # For aggregation, separate by trading pair to prevent mixing JKC/USDT and JKC/BTC
     current_time = int(time.time())
     buyer_id = f"{exchange}_{pair_type}_current"  # Include pair type in key
 
@@ -2059,9 +1901,9 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
             logger.debug(f"📊 Aggregation calculation details for {len(trades)} trades:")
             for i, trade in enumerate(trades):
                 trade_side = trade.get('trade_side', 'unknown').upper()
-                logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT ({trade_side})")
-            logger.debug(f"  Total: {total_quantity:.4f} XBT, Corrected Value: {corrected_total_value:.2f} USDT")
-            logger.debug(f"  Weighted Avg: {corrected_total_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
+                logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} JKC @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT ({trade_side})")
+            logger.debug(f"  Total: {total_quantity:.4f} JKC, Corrected Value: {corrected_total_value:.2f} USDT")
+            logger.debug(f"  Weighted Avg: {corrected_total_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per JKC")
 
             # Verification: Check if weighted average calculation is correct
             calculated_total = avg_price * total_quantity
@@ -2082,7 +1924,7 @@ async def process_message(price, quantity, sum_value, exchange, timestamp, excha
                     trades[0]['exchange_url'],
                     len(trades),
                     trades,  # Pass trade details for breakdown
-                    pair_type="XBT/BTC",
+                    pair_type="JKC/BTC",
                     usdt_price=avg_usdt_price,
                     usdt_sum_value=total_usdt_sum,
                     btc_rate=btc_rate_used
@@ -2132,14 +1974,18 @@ async def process_aggregated_trades():
     exchanges = list(PENDING_TRADES.keys())
 
     for exchange in exchanges:
-        # Make a copy of the buyer_ids to avoid modification during iteration
-        buyer_ids = list(PENDING_TRADES[exchange].keys())
+        # Make a copy of the pair_types to avoid modification during iteration
+        pair_types = list(PENDING_TRADES[exchange].keys())
 
-        for buyer_id in buyer_ids:
-            # Check if this aggregation window has expired
-            aggregation_data = PENDING_TRADES[exchange][buyer_id]
-            window_start = aggregation_data['window_start']
-            time_in_window = current_time - window_start
+        for pair_type in pair_types:
+            # Make a copy of the buyer_ids to avoid modification during iteration
+            buyer_ids = list(PENDING_TRADES[exchange][pair_type].keys())
+
+            for buyer_id in buyer_ids:
+                # Check if this aggregation window has expired
+                aggregation_data = PENDING_TRADES[exchange][pair_type][buyer_id]
+                window_start = aggregation_data['window_start']
+                time_in_window = current_time - window_start
 
             if time_in_window >= aggregation_window:
                 # This window has expired, process the trades
@@ -2158,9 +2004,9 @@ async def process_aggregated_trades():
                     # Debug logging for expired aggregation calculation verification
                     logger.debug(f"Expired aggregation calculation details for {len(trades)} trades:")
                     for i, trade in enumerate(trades):
-                        logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT")
-                    logger.debug(f"  Total: {total_quantity:.4f} XBT, Total Value: {total_value:.2f} USDT")
-                    logger.debug(f"  Weighted Avg: {total_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per XBT")
+                        logger.debug(f"  Trade {i+1}: {trade['quantity']:.4f} JKC @ {trade['price']:.6f} USDT = {trade['sum_value']:.2f} USDT")
+                    logger.debug(f"  Total: {total_quantity:.4f} JKC, Total Value: {total_value:.2f} USDT")
+                    logger.debug(f"  Weighted Avg: {total_value:.2f} / {total_quantity:.4f} = {avg_price:.6f} USDT per JKC")
 
                     # Verification: Check if weighted average calculation is correct
                     calculated_total = avg_price * total_quantity
@@ -2169,7 +2015,7 @@ async def process_aggregated_trades():
                     else:
                         logger.debug(f"Expired aggregation price calculation verified: {avg_price:.6f} * {total_quantity:.4f} = {calculated_total:.2f} ≈ {total_value:.2f}")
 
-                    logger.info(f"Processing expired aggregated trades: {len(trades)} trades, {total_quantity} XBT, {total_value} USDT")
+                    logger.info(f"Processing expired aggregated trades: {len(trades)} trades, {total_quantity} JKC, {total_value} USDT")
 
                     # Send the alert with trade details
                     await send_alert(
@@ -2186,29 +2032,17 @@ async def process_aggregated_trades():
                     logger.info(f"Expired aggregated trades below threshold: {total_value} USDT < {VALUE_REQUIRE} USDT")
 
                 # Remove these trades
-                del PENDING_TRADES[exchange][buyer_id]
+                del PENDING_TRADES[exchange][pair_type][buyer_id]
+
+                # If the pair_type dict is now empty, remove it
+                if not PENDING_TRADES[exchange][pair_type]:
+                    del PENDING_TRADES[exchange][pair_type]
 
                 # If the exchange dict is now empty, remove it
                 if not PENDING_TRADES[exchange]:
                     del PENDING_TRADES[exchange]
 
-def validate_price_calculation(price, quantity, sum_value, context="Unknown"):
-    """Validate that price * quantity = sum_value within acceptable tolerance."""
-    expected_value = price * quantity
-    tolerance = max(0.01, expected_value * 0.001)  # 0.1% tolerance or 0.01 USDT minimum
-
-    if abs(sum_value - expected_value) > tolerance:
-        logger.error(f"❌ PRICE CALCULATION VALIDATION FAILED in {context}:")
-        logger.error(f"  💵 Price: {price:.6f} USDT")
-        logger.error(f"  📊 Quantity: {quantity:.4f} XBT")
-        logger.error(f"  ✅ Expected Value: {expected_value:.2f} USDT")
-        logger.error(f"  ❌ Actual Value: {sum_value:.2f} USDT")
-        logger.error(f"  📉 Difference: {sum_value - expected_value:.2f} USDT")
-        logger.error(f"  🎯 Tolerance: {tolerance:.2f} USDT")
-        return False, expected_value
-
-    logger.debug(f"✅ Price calculation validated in {context}: {price:.6f} * {quantity:.4f} = {sum_value:.2f} USDT")
-    return True, sum_value
+# validate_price_calculation function is imported from utils.py
 
 def validate_buy_volume_aggregation(trades_list, expected_total, context="Unknown"):
     """Validate that buy volume aggregation is correct and excludes sell trades."""
@@ -2265,12 +2099,12 @@ def validate_buy_volume_aggregation(trades_list, expected_total, context="Unknow
     return validation_passed, buy_volume, sell_volume
 
 async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_url, num_trades=1, trade_details=None,
-                     pair_type="XBT/USDT", usdt_price=None, usdt_sum_value=None, btc_rate=None):
+                     pair_type="JKC/USDT", usdt_price=None, usdt_sum_value=None, btc_rate=None):
     """Send an alert to all active chats with robust error handling and fallback."""
     global PHOTO
 
     # Determine pair type for validation
-    pair_currency = "BTC" if pair_type == "XBT/BTC" else "USDT"
+    pair_currency = "BTC" if pair_type == "JKC/BTC" else "USDT"
 
     # Validate the alert calculation before sending
     is_valid, corrected_value = validate_price_calculation(price, quantity, sum_value, f"Alert from {exchange}", pair_currency)
@@ -2279,7 +2113,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         sum_value = corrected_value  # Use corrected value for the alert
 
     # Enhanced logging for alert processing
-    logger.info(f"🚨 ALERT TRIGGERED: {quantity:.4f} XBT at ${price:.6f} = ${sum_value:.2f} USDT from {exchange}")
+    logger.info(f"🚨 ALERT TRIGGERED: {quantity:.4f} JKC at ${price:.6f} = ${sum_value:.2f} USDT from {exchange}")
     logger.info(f"📊 Alert details: {num_trades} trade(s), threshold: ${VALUE_REQUIRE} USDT")
 
     # Log individual trade details if provided
@@ -2287,7 +2121,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         logger.info(f"📋 Individual trade breakdown:")
         for i, trade in enumerate(trade_details[:5]):  # Log first 5 trades
             trade_side = trade.get('trade_side', 'unknown').upper()
-            logger.info(f"  Trade {i+1}: {trade['quantity']:.4f} XBT @ ${trade['price']:.6f} = ${trade['sum_value']:.2f} USDT ({trade_side})")
+            logger.info(f"  Trade {i+1}: {trade['quantity']:.4f} JKC @ ${trade['price']:.6f} = ${trade['sum_value']:.2f} USDT ({trade_side})")
         if len(trade_details) > 5:
             logger.info(f"  ... and {len(trade_details) - 5} more trades")
 
@@ -2307,7 +2141,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     # Get comprehensive market data for additional context
     try:
         # Fetch real-time prices for both trading pairs
-        market_data_usdt = await get_nonkyc_ticker()  # XBT/USDT
+        market_data_usdt = await get_nonkyc_ticker()  # JKC/USDT
         volume_data = await calculate_combined_volume_periods()
         volume_periods = volume_data["combined"]
 
@@ -2315,27 +2149,9 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         current_price_usdt = market_data_usdt.get("lastPriceNumber", price) if market_data_usdt else price
         market_cap = market_data_usdt.get("marketcapNumber", 0) if market_data_usdt else 0
 
-        # Try to get XBT/BTC price (this would need a separate API call for BTC pair)
-        # Get real-time BTC rate for accurate conversion
-        try:
-            from api_clients import get_btc_usdt_rate
-            btc_rate = await get_btc_usdt_rate()
-            if not btc_rate:
-                btc_rate = 65000.0  # Conservative fallback
-
-            # Determine pair type and convert appropriately
-            if price < 1.0:
-                # This is likely a BTC pair
-                current_price_btc = price
-                current_price_usdt_from_btc = current_price_btc * btc_rate
-            else:
-                # This is likely a USDT pair
-                current_price_btc = price / btc_rate
-                current_price_usdt_from_btc = price
-        except Exception as e:
-            logger.warning(f"Error getting BTC rate for price conversion: {e}")
-            current_price_btc = 0
-            current_price_usdt_from_btc = price if price >= 1.0 else 0
+        # JKC only trades against USDT - no BTC conversion needed
+        current_price_btc = 0  # BTC functionality removed, set to 0
+        current_price_usdt_from_btc = price  # Price is already in USDT
 
     except Exception as e:
         logger.warning(f"Could not fetch market data for alert: {e}")
@@ -2371,7 +2187,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     elif magnitude_ratio >= 5:
         alert_text = "🔥🔥 <b>HUGE Transaction LFG!!!</b> 🔥🔥"
     elif magnitude_ratio >= 3:
-        alert_text = "🔥 <b>MAJOR Buy Alert Bitcoin Classic Traders!</b> 🔥"
+        alert_text = "🔥 <b>MAJOR Buy Alert JunkCoin Traders!</b> 🔥"
     elif magnitude_ratio >= 2:
         alert_text = "💥 <b>SIGNIFICANT Transaction Alert!</b> 💥"
     else:
@@ -2383,30 +2199,15 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         alert_text = alert_text.replace("Transaction", "Sweep Buy")
         alert_text = alert_text.replace("Buy", "Sweep Buy")
 
-    # Format message based on trading pair
-    if pair_type == "XBT/BTC":
-        # For BTC pairs, show both BTC and USDT equivalent values
-        message = (
-            f"{magnitude_indicator}\n\n"
-            f"{alert_text}\n\n"
-            f"💰 <b>Amount:</b> {quantity:.4f} XBT\n"
-            f"₿ <b>Trade Price:</b> {price:.8f} BTC\n"
-            f"💵 <b>USDT Equivalent:</b> ≈ ${usdt_price:.6f} USDT\n" if usdt_price else ""
-            f"💲 <b>Total Value:</b> {sum_value:.8f} BTC\n"
-            f"💵 <b>USDT Equivalent:</b> ≈ ${usdt_sum_value:.2f} USDT\n" if usdt_sum_value else ""
-            f"🏦 <b>Exchange:</b> {exchange}\n"
-            f"📈 <b>BTC Rate:</b> ${btc_rate:.2f} USDT\n" if btc_rate else ""
-        )
-    else:
-        # For USDT pairs, use standard formatting
-        message = (
-            f"{magnitude_indicator}\n\n"
-            f"{alert_text}\n\n"
-            f"💰 <b>Amount:</b> {quantity:.4f} XBT\n"
-            f"💵 <b>Trade Price:</b> ${price:.6f} USDT\n"
-            f"💲 <b>Total Value:</b> ${sum_value:.2f} USDT\n"
-            f"🏦 <b>Exchange:</b> {exchange}\n"
-        )
+    # JKC only trades against USDT
+    message = (
+        f"{magnitude_indicator}\n\n"
+        f"{alert_text}\n\n"
+        f"💰 <b>Amount:</b> {quantity:.4f} JKC\n"
+        f"💵 <b>Trade Price:</b> ${price:.6f} USDT\n"
+        f"💲 <b>Total Value:</b> ${sum_value:.2f} USDT\n"
+        f"🏦 <b>Exchange:</b> {exchange}\n"
+    )
 
     # Add number of trades if it's an aggregated alert
     if num_trades > 1:
@@ -2422,37 +2223,37 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         orders_to_show = min(5, len(trade_details))
         for i in range(orders_to_show):
             trade = trade_details[i]
-            if pair_type == "XBT/BTC":
+            if pair_type == "JKC/BTC":
                 # Format for BTC pairs with USDT equivalent
                 usdt_equiv = trade.get('usdt_price', 0)
                 if usdt_equiv:
-                    message += f"Order {i+1}: {trade['quantity']:.4f} XBT at {trade['price']:.8f} BTC (≈ ${usdt_equiv:.6f} USDT)\n"
+                    message += f"Order {i+1}: {trade['quantity']:.4f} JKC at {trade['price']:.8f} BTC (≈ ${usdt_equiv:.6f} USDT)\n"
                 else:
-                    message += f"Order {i+1}: {trade['quantity']:.4f} XBT at {trade['price']:.8f} BTC\n"
+                    message += f"Order {i+1}: {trade['quantity']:.4f} JKC at {trade['price']:.8f} BTC\n"
             else:
                 # Format for USDT pairs
-                message += f"Order {i+1}: {trade['quantity']:.4f} XBT at ${trade['price']:.6f} USDT\n"
+                message += f"Order {i+1}: {trade['quantity']:.4f} JKC at ${trade['price']:.6f} USDT\n"
 
         # If more than 5 orders, aggregate the remaining ones
         if len(trade_details) > 5:
             remaining_trades = trade_details[5:]
             remaining_quantity = sum(t['quantity'] for t in remaining_trades)
             remaining_count = len(remaining_trades)
-            message += f"Orders 6-{len(trade_details)}: {remaining_quantity:.4f} XBT total ({remaining_count} additional orders)\n"
+            message += f"Orders 6-{len(trade_details)}: {remaining_quantity:.4f} JKC total ({remaining_count} additional orders)\n"
 
         # Add summary calculations
         message += f"\n📊 <b>Summary:</b>\n"
-        if pair_type == "XBT/BTC":
+        if pair_type == "JKC/BTC":
             message += f"Average Price: {price:.8f} BTC\n"
             if usdt_price:
                 message += f"USDT Equivalent: ≈ ${usdt_price:.6f} USDT\n"
-            message += f"Total Volume: {quantity:.4f} XBT\n"
+            message += f"Total Volume: {quantity:.4f} JKC\n"
             message += f"Total Value: {sum_value:.8f} BTC\n"
             if usdt_sum_value:
                 message += f"USDT Equivalent: ≈ ${usdt_sum_value:.2f} USDT\n"
         else:
             message += f"Average Price: ${price:.6f} USDT\n"
-            message += f"Total Volume: {quantity:.4f} XBT\n"
+            message += f"Total Volume: {quantity:.4f} JKC\n"
             message += f"Total Value: ${sum_value:.2f} USDT\n"
 
     # Add real-time price information
@@ -2460,10 +2261,10 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
     if current_price_usdt > 0:
         price_change_usdt = ((current_price_usdt - price) / price) * 100 if price > 0 else 0
         price_change_emoji = "📈" if price_change_usdt >= 0 else "📉"
-        message += f"💵 XBT/USDT: ${current_price_usdt:.6f} {price_change_emoji} ({price_change_usdt:+.2f}%)\n"
+        message += f"💵 JKC/USDT: ${current_price_usdt:.6f} {price_change_emoji} ({price_change_usdt:+.2f}%)\n"
 
     if current_price_btc > 0:
-        message += f"₿ XBT/BTC: {current_price_btc:.8f} BTC\n"
+        message += f"₿ JKC/BTC: {current_price_btc:.8f} BTC\n"
 
     # Add market data if available
     if market_cap > 0:
@@ -2563,7 +2364,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
 
                     # Implement robust text-only fallback
                     try:
-                        fallback_message = f"🖼️ <b>XBT Alert</b> (Image delivery failed)\n\n{message}"
+                        fallback_message = f"🖼️ <b>JKC Alert</b> (Image delivery failed)\n\n{message}"
                         await bot.send_message(
                             chat_id=chat_id,
                             text=fallback_message,
@@ -2580,7 +2381,7 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
             else:
                 # No image available, send text-only alert
                 try:
-                    text_only_message = f"📝 <b>XBT Alert</b> (Text-only mode)\n\n{message}"
+                    text_only_message = f"📝 <b>JKC Alert</b> (Text-only mode)\n\n{message}"
                     await bot.send_message(
                         chat_id=chat_id,
                         text=text_only_message,
@@ -2612,11 +2413,11 @@ async def send_alert(price, quantity, sum_value, exchange, timestamp, exchange_u
         logger.info(f"🎉 Perfect delivery: Alert successfully sent to all {total_chats} chat(s)")
 
 async def chart_command(update: Update, context: CallbackContext) -> None:
-    """Generate and send price charts for both XBT/USDT and XBT/BTC pairs."""
-    await update.message.reply_text("📊 Generating charts for both trading pairs, please wait...")
+    """Generate and send price chart for JKC/USDT pair."""
+    await update.message.reply_text("📊 Generating JKC/USDT chart, please wait...")
 
     try:
-        # Get historical trades for XBT/USDT
+        # Get historical trades for JKC/USDT
         trades_usdt = await get_nonkyc_trades()
 
         if not trades_usdt:
@@ -2630,17 +2431,17 @@ async def chart_command(update: Update, context: CallbackContext) -> None:
         df_usdt['quantity'] = df_usdt['quantity'].astype(float)
         df_usdt = df_usdt.sort_values('timestamp')
 
-        # Create XBT/USDT chart
+        # Create JKC/USDT chart
         fig_usdt = go.Figure(data=[go.Scatter(
             x=df_usdt['timestamp'],
             y=df_usdt['price'],
             mode='lines',
-            name='XBT/USDT',
+            name='JKC/USDT',
             line=dict(color='#00D4AA', width=2)  # NonKYC green color
         )])
 
         fig_usdt.update_layout(
-            title='📈 XBT/USDT Price Chart (NonKYC Exchange)',
+            title='📈 JKC/USDT Price Chart (NonKYC Exchange)',
             xaxis_title='Time',
             yaxis_title='Price (USDT)',
             template='plotly_dark',
@@ -2651,14 +2452,14 @@ async def chart_command(update: Update, context: CallbackContext) -> None:
             title_font=dict(size=16)
         )
 
-        # Save XBT/USDT chart
+        # Save JKC/USDT chart
         chart_usdt_path = 'temp_chart_usdt.png'
         fig_usdt.write_image(chart_usdt_path)
 
-        # Send XBT/USDT chart with trading link
+        # Send JKC/USDT chart with trading link
         usdt_caption = (
-            "📊 <b>XBT/USDT Price Chart</b>\n"
-            "💱 <a href='https://nonkyc.io/market/XBT_USDT'>Trade XBT/USDT on NonKYC</a>\n"
+            "📊 <b>JKC/USDT Price Chart</b>\n"
+            "💱 <a href='https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3'>Trade JKC/USDT on NonKYC</a>\n"
             "📈 Real-time trading data from NonKYC Exchange"
         )
 
@@ -2669,76 +2470,15 @@ async def chart_command(update: Update, context: CallbackContext) -> None:
                 parse_mode="HTML"
             )
 
-        # Try to get BTC pair data (this might not be available, so we'll simulate or skip)
-        try:
-            # For now, we'll create a simulated BTC chart based on USDT data
-            # In a real implementation, you'd fetch actual XBT/BTC data
-
-            # Get current BTC price to convert USDT prices to BTC equivalent
-            # This is a simplified approach - in reality you'd want actual XBT/BTC trade data
-            btc_price_usdt = 45000  # Approximate BTC price - you could fetch this from an API
-
-            df_btc = df_usdt.copy()
-            df_btc['price_btc'] = df_btc['price'] / btc_price_usdt
-
-            fig_btc = go.Figure(data=[go.Scatter(
-                x=df_btc['timestamp'],
-                y=df_btc['price_btc'],
-                mode='lines',
-                name='XBT/BTC',
-                line=dict(color='#F7931A', width=2)  # Bitcoin orange color
-            )])
-
-            fig_btc.update_layout(
-                title='₿ XBT/BTC Price Chart (Estimated)',
-                xaxis_title='Time',
-                yaxis_title='Price (BTC)',
-                template='plotly_dark',
-                autosize=True,
-                width=1000,
-                height=600,
-                font=dict(size=12),
-                title_font=dict(size=16)
-            )
-
-            # Save XBT/BTC chart
-            chart_btc_path = 'temp_chart_btc.png'
-            fig_btc.write_image(chart_btc_path)
-
-            # Send XBT/BTC chart with trading link
-            btc_caption = (
-                "₿ <b>XBT/BTC Price Chart</b>\n"
-                "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>\n"
-                "📊 Estimated from USDT pair data"
-            )
-
-            with open(chart_btc_path, 'rb') as f:
-                await update.message.reply_photo(
-                    photo=f,
-                    caption=btc_caption,
-                    parse_mode="HTML"
-                )
-
-            # Clean up BTC chart
-            os.remove(chart_btc_path)
-
-        except Exception as btc_error:
-            logger.warning(f"Could not generate BTC chart: {btc_error}")
-            # Send message about BTC trading link anyway
-            await update.message.reply_text(
-                "₿ <b>XBT/BTC Trading</b>\n"
-                "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>",
-                parse_mode="HTML"
-            )
+        # BTC pair removed - JKC only trades against USDT
 
         # Clean up USDT chart
         os.remove(chart_usdt_path)
 
-        # Send summary message with both trading links
+        # Send summary message with trading links
         summary_message = (
-            "📊 <b>XBT Trading Pairs on NonKYC Exchange</b>\n\n"
-            "💱 <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT Trading</a>\n"
-            "₿ <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC Trading</a>\n\n"
+            "📊 <b>JKC Trading on NonKYC Exchange</b>\n\n"
+            "💱 <a href='https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3'>JKC/USDT Trading</a>\n\n"
             "🌐 <a href='https://nonkyc.io'>Visit NonKYC Exchange</a>"
         )
 
@@ -2775,14 +2515,15 @@ async def set_minimum_command(update: Update, context: CallbackContext) -> int:
     if not await can_use_admin_commands(update, context):
         logger.warning(f"User {user_id} tried to use setmin command without admin permissions")
         chat_id = update.effective_chat.id
-        if chat_id == -1002471264202:
+        public_supergroups = CONFIG.get("public_supergroups", [])
+        if chat_id in public_supergroups:
             await update.message.reply_text(
                 "❌ <b>Permission Denied</b>\n\n"
                 "The /setmin command is restricted to the bot owner only.\n"
                 "This is a public supergroup where settings are managed centrally.\n\n"
                 "📊 You can still use:\n"
                 "• /help - View available commands\n"
-                "• /price - Check current XBT price\n"
+                "• /price - Check current JKC price\n"
                 "• /chart - Generate price chart",
                 parse_mode="HTML"
             )
@@ -2812,7 +2553,7 @@ async def set_minimum_command(update: Update, context: CallbackContext) -> int:
         f"• <code>100</code> (for $100 USDT)\n"
         f"• <code>250.50</code> (for $250.50 USDT)\n"
         f"• <code>1000</code> (for $1,000 USDT)\n\n"
-        f"🔔 <i>The bot will alert on XBT transactions at or above this value.</i>"
+        f"🔔 <i>The bot will alert on JKC transactions at or above this value.</i>"
     )
 
     await update.message.reply_text(prompt_message, parse_mode="HTML")
@@ -2915,7 +2656,7 @@ async def set_minimum_input(update: Update, context: CallbackContext) -> int:
             f"📊 <b>Status:</b> Threshold {change_text}\n"
             f"💾 <b>Configuration:</b> Saved to file\n"
             f"⚡ <b>Effect:</b> Active immediately\n\n"
-            f"🔔 The bot will now alert on XBT transactions of ${new_value:.2f} USDT or higher."
+            f"🔔 The bot will now alert on JKC transactions of ${new_value:.2f} USDT or higher."
         )
 
         await update.message.reply_text(success_message, parse_mode="HTML")
@@ -2955,7 +2696,8 @@ async def set_image_command(update: Update, context: CallbackContext) -> int:
     if not await can_use_admin_commands(update, context):
         logger.warning(f"User {user_id} tried to use setimage command without admin permissions")
         chat_id = update.effective_chat.id
-        if chat_id == -1002471264202:
+        public_supergroups = CONFIG.get("public_supergroups", [])
+        if chat_id in public_supergroups:
             await update.message.reply_text(
                 "❌ <b>Permission Denied</b>\n\n"
                 "The /setimage command is restricted to the bot owner only.\n"
@@ -3123,8 +2865,8 @@ async def start_bot(update: Update, context: CallbackContext) -> None:
 
             # Send welcome message with commands
             welcome_text = (
-                "🎉 <b>Bitcoin Classic (XBT) Alert Bot Started!</b> 🎉\n\n"
-                "You will now receive alerts for significant XBT transactions.\n\n"
+                "🎉 <b>JunkCoin (JKC) Alert Bot Started!</b> 🎉\n\n"
+                "You will now receive alerts for significant JKC transactions.\n\n"
                 "<b>Current threshold:</b> {:.2f} USDT\n"
                 "<b>Dynamic threshold:</b> {}\n"
                 "<b>Trade aggregation:</b> {} (window: {}s)\n\n"
@@ -3162,14 +2904,15 @@ async def start_bot(update: Update, context: CallbackContext) -> None:
     else:
         # Enhanced error message based on chat type
         chat_type = "private chat" if chat_id > 0 else "group/supergroup"
-        if chat_id == -1002471264202:
+        public_supergroups = CONFIG.get("public_supergroups", [])
+        if chat_id in public_supergroups:
             await update.message.reply_text(
                 "❌ <b>Permission Denied</b>\n\n"
                 "The /start command is restricted to the bot owner only.\n"
                 "This is a public supergroup where alerts are managed centrally.\n\n"
                 "📊 You can still use:\n"
                 "• /help - View available commands\n"
-                "• /price - Check current XBT price\n"
+                "• /price - Check current JKC price\n"
                 "• /chart - Generate price chart\n"
                 "• /debug - View your user info",
                 parse_mode="HTML"
@@ -3199,7 +2942,7 @@ async def stop_bot(update: Update, context: CallbackContext) -> None:
             CONFIG["active_chat_ids"] = ACTIVE_CHAT_IDS
             save_config(CONFIG)
             await update.message.reply_text(
-                "🛑 <b>XBT Alert Bot Stopped</b>\n\n"
+                "🛑 <b>JKC Alert Bot Stopped</b>\n\n"
                 "You will no longer receive alerts in this chat.\n"
                 "Use /start to resume alerts.",
                 parse_mode="HTML"
@@ -3214,14 +2957,15 @@ async def stop_bot(update: Update, context: CallbackContext) -> None:
     else:
         # Enhanced error message based on chat type
         chat_type = "private chat" if chat_id > 0 else "group/supergroup"
-        if chat_id == -1002471264202:
+        public_supergroups = CONFIG.get("public_supergroups", [])
+        if chat_id in public_supergroups:
             await update.message.reply_text(
                 "❌ <b>Permission Denied</b>\n\n"
                 "The /stop command is restricted to the bot owner only.\n"
                 "This is a public supergroup where alerts are managed centrally.\n\n"
                 "📊 You can still use:\n"
                 "• /help - View available commands\n"
-                "• /price - Check current XBT price\n"
+                "• /price - Check current JKC price\n"
                 "• /chart - Generate price chart\n"
                 "• /debug - View your user info",
                 parse_mode="HTML"
@@ -3297,7 +3041,7 @@ async def check_price(update: Update, context: CallbackContext) -> None:
         yesterday_price = current_price / (1 + change_percent/100) if change_percent != 0 else current_price
         high_24h = current_price * 1.05  # Estimate
         low_24h = current_price * 0.95   # Estimate
-        volume_24h_xbt = volume_24h_usdt / current_price if current_price > 0 else 0
+        volume_24h_jkc = volume_24h_usdt / current_price if current_price > 0 else 0
         best_bid = current_price * 0.999  # Estimate
         best_ask = current_price * 1.001  # Estimate
         spread_percent = 0.2  # Estimate
@@ -3307,7 +3051,7 @@ async def check_price(update: Update, context: CallbackContext) -> None:
         yesterday_price = market_data.get("yesterdayPriceNumber", 0) or 0
         high_24h = market_data.get("highPriceNumber", 0) or 0
         low_24h = market_data.get("lowPriceNumber", 0) or 0
-        volume_24h_xbt = market_data.get("volumeNumber", 0) or 0
+        volume_24h_jkc = market_data.get("volumeNumber", 0) or 0
         volume_24h_usdt = market_data.get("volumeUsdNumber", 0) or 0
         change_percent = market_data.get("changePercentNumber", 0) or 0
         market_cap_nonkyc = market_data.get("marketcapNumber", 0) or 0
@@ -3347,17 +3091,17 @@ async def check_price(update: Update, context: CallbackContext) -> None:
 
     # Create buttons with trading links
     button1 = InlineKeyboardButton(
-        text="📊 LiveCoinWatch", url="https://www.livecoinwatch.com/price/BitcoinClassic-_XBT")
+        text="📊 CoinGecko", url="https://www.coingecko.com/en/coins/junkcoin")
     button2 = InlineKeyboardButton(
-        text="📈 CoinPaprika", url="https://coinpaprika.com/coin/xbt-bitcoin-classic/")
+        text="📈 CoinMarketCap", url="https://coinmarketcap.com/currencies/junkcoin/")
     button3 = InlineKeyboardButton(
-        text="💱 Trade XBT/USDT", url="https://nonkyc.io/market/XBT_USDT")
+        text="💱 Trade JKC/USDT", url="https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3")
     button4 = InlineKeyboardButton(
-        text="₿ Trade XBT/BTC", url="https://nonkyc.io/market/XBT_BTC")
+        text="🔍 Explorer", url="https://jkc-explorer.dedoo.xyz/")
     button5 = InlineKeyboardButton(
-        text="🌐 Bitcoin Classic Website", url="https://www.classicxbt.com")
+        text="🌐 JunkCoin Website", url="https://junk-coin.com/")
     button6 = InlineKeyboardButton(
-        text="💰 Get XBT Wallet", url="https://www.classicxbt.com/wallets")
+        text="💰 Get JKC Wallet", url="https://junk-coin.com/wallets/")
     keyboard = InlineKeyboardMarkup([
         [button1, button2],
         [button3, button4],
@@ -3377,7 +3121,7 @@ async def check_price(update: Update, context: CallbackContext) -> None:
 
     # Format the message with rich data including momentum and volume periods
     message = (
-        f"🪙 <b>Bitcoin Classic (XBT) Market Data</b> 🪙\n\n"
+        f"🪙 <b>JunkCoin (JKC) Market Data</b> 🪙\n\n"
         f"💰 <b>Price:</b> ${current_price:.6f} USDT\n"
         f"{change_emoji} <b>24h Change:</b> {change_sign}{change_percent:.2f}% "
         f"({change_sign}${price_change_usdt:.6f})\n\n"
@@ -3393,7 +3137,7 @@ async def check_price(update: Update, context: CallbackContext) -> None:
         f"📊 <b>24h Statistics:</b>\n"
         f"📈 <b>High:</b> ${high_24h:.6f}\n"
         f"📉 <b>Low:</b> ${low_24h:.6f}\n"
-        f"💹 <b>Volume:</b> {volume_24h_xbt:,.4f} XBT (${volume_24h_usdt:,.0f})\n\n"
+        f"💹 <b>Volume:</b> {volume_24h_jkc:,.4f} JKC (${volume_24h_usdt:,.0f})\n\n"
 
         f"📈 <b>Combined Volume (NonKYC + CoinEx):</b>\n"
         f"🕐 <b>15m:</b> ${volume_periods['15m']:,.0f}\n"
@@ -3419,14 +3163,15 @@ async def config_command(update: Update, context: CallbackContext) -> int:
     """Command to access the configuration menu."""
     if not await can_use_admin_commands(update, context):
         chat_id = update.effective_chat.id
-        if chat_id == -1002471264202:
+        public_supergroups = CONFIG.get("public_supergroups", [])
+        if chat_id in public_supergroups:
             await update.message.reply_text(
                 "❌ <b>Permission Denied</b>\n\n"
                 "Configuration commands are restricted to the bot owner only.\n"
                 "This is a public supergroup where settings are managed centrally.\n\n"
                 "📊 You can still use:\n"
                 "• /help - View available commands\n"
-                "• /price - Check current XBT price\n"
+                "• /price - Check current JKC price\n"
                 "• /chart - Generate price chart",
                 parse_mode="HTML"
             )
@@ -3711,20 +3456,25 @@ async def set_api_keys_input(update: Update, context: CallbackContext) -> int:
 async def help_command(update: Update, context: CallbackContext) -> None:
     """Show help information and available commands based on chat type and permissions."""
     chat_id = update.effective_chat.id
-    is_public_supergroup = (chat_id == -1002471264202)
+
+    # Load public supergroups from config
+    public_supergroups = CONFIG.get("public_supergroups", [])
+    is_public_supergroup = (chat_id in public_supergroups)
     is_user_admin = await can_use_admin_commands(update, context)
     is_owner = await is_owner_only(update, context)
 
     # Base help text for all users
     base_help = (
-        "<b>Bitcoin Classic ($XBT) Alert Bot</b>\n\n"
-        "🚨 <b>Real-time Bitcoin Classic (XBT) market data and price monitoring</b>\n"
+        "<b>JunkCoin ($JKC) Alert Bot</b>\n\n"
+        "🚨 <b>Real-time JunkCoin (JKC) market data and price monitoring</b>\n"
         "🎯 <b>Live price updates, market cap tracking, and volume analysis</b>\n"
         "🎨 <b>Professional alert system with rich market data</b>\n\n"
 
         "📊 <b>Information Commands (Available to Everyone):</b>\n"
-        "/price - Check current XBT price and market cap\n"
+        "/price - Check current JKC price and market cap\n"
         "/chart - Generate and send a price chart\n"
+        "/tx &lt;hash&gt; - Look up transaction information\n"
+        "/address &lt;address&gt; - Check wallet balance and info\n"
         "/debug - Show user ID, chat info, and permissions\n"
         "/help - Show this help message\n\n"
     )
@@ -3796,10 +3546,10 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 
     # Common footer for all users
     help_text += (
-        "☕ <b>XBTBuyBot Developer Coffee Tip:</b>\n"
+        "☕ <b>JKCBuyBot Developer Coffee Tip:</b>\n"
         "If you find this bot helpful, consider supporting the developer!\n"
         "Developer: @moonether\n"
-        "Bitcoin Address: <code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>"
+        "JKC Address: <code>7Vm7sXtC53aXWgMnEKDYdp9rfz2BkX454w</code>"
     )
     
     # Create buttons for quick access to common commands
@@ -3888,7 +3638,7 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                 yesterday_price = current_price / (1 + change_percent/100) if change_percent != 0 else current_price
                 high_24h = current_price * 1.05
                 low_24h = current_price * 0.95
-                volume_24h_xbt = volume_24h_usdt / current_price if current_price > 0 else 0
+                volume_24h_jkc = volume_24h_usdt / current_price if current_price > 0 else 0
                 best_bid = current_price * 0.999
                 best_ask = current_price * 1.001
                 spread_percent = 0.2
@@ -3897,7 +3647,7 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                 yesterday_price = market_data.get("yesterdayPriceNumber", 0) or 0
                 high_24h = market_data.get("highPriceNumber", 0) or 0
                 low_24h = market_data.get("lowPriceNumber", 0) or 0
-                volume_24h_xbt = market_data.get("volumeNumber", 0) or 0
+                volume_24h_jkc = market_data.get("volumeNumber", 0) or 0
                 volume_24h_usdt = market_data.get("volumeUsdNumber", 0) or 0
                 change_percent = market_data.get("changePercentNumber", 0) or 0
                 market_cap_nonkyc = market_data.get("marketcapNumber", 0) or 0
@@ -3946,7 +3696,7 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
 
             # Format the message with rich data including momentum and volume periods
             message = (
-                f"🪙 <b>Bitcoin Classic (XBT) Market Data</b> 🪙\n\n"
+                f"🪙 <b>JunkCoin (JKC) Market Data</b> 🪙\n\n"
                 f"💰 <b>Price:</b> ${current_price:.6f} USDT\n"
                 f"{change_emoji} <b>24h Change:</b> {change_sign}{change_percent:.2f}% "
                 f"({change_sign}${price_change_usdt:.6f})\n\n"
@@ -3962,7 +3712,7 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                 f"📊 <b>24h Statistics:</b>\n"
                 f"📈 <b>High:</b> ${high_24h:.6f}\n"
                 f"📉 <b>Low:</b> ${low_24h:.6f}\n"
-                f"💹 <b>Volume:</b> {volume_24h_xbt:,.0f} XBT (${volume_24h_usdt:,.0f})\n\n"
+                f"💹 <b>Volume:</b> {volume_24h_jkc:,.0f} JKC (${volume_24h_usdt:,.0f})\n\n"
 
                 f"📈 <b>Combined Volume (NonKYC + CoinEx):</b>\n"
                 f"🕐 <b>15m:</b> ${volume_periods['15m']:,.0f}\n"
@@ -3981,16 +3731,16 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
             # Create buttons with trading links
             keyboard = [
                 [
-                    InlineKeyboardButton("📊 LiveCoinWatch", url="https://www.livecoinwatch.com/price/BitcoinClassic-_XBT"),
-                    InlineKeyboardButton("📈 CoinPaprika", url="https://coinpaprika.com/coin/xbt-bitcoin-classic/")
+                    InlineKeyboardButton("📊 CoinGecko", url="https://www.coingecko.com/en/coins/junkcoin"),
+                    InlineKeyboardButton("📈 CoinMarketCap", url="https://coinmarketcap.com/currencies/junkcoin/")
                 ],
                 [
-                    InlineKeyboardButton("💱 Trade XBT/USDT", url="https://nonkyc.io/market/XBT_USDT"),
-                    InlineKeyboardButton("₿ Trade XBT/BTC", url="https://nonkyc.io/market/XBT_BTC")
+                    InlineKeyboardButton("💱 Trade JKC/USDT", url="https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3"),
+                    InlineKeyboardButton("🔍 Explorer", url="https://jkc-explorer.dedoo.xyz/")
                 ],
                 [
-                    InlineKeyboardButton("🌐 Bitcoin Classic Website", url="https://www.classicxbt.com"),
-                    InlineKeyboardButton("💰 Get XBT Wallet", url="https://www.classicxbt.com/wallets")
+                    InlineKeyboardButton("🌐 JunkCoin Website", url="https://junk-coin.com/"),
+                    InlineKeyboardButton("💰 Get JKC Wallet", url="https://junk-coin.com/wallets/")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -4010,7 +3760,7 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
             # Send initial processing message
             await query.edit_message_text("🔄 Generating charts for both trading pairs, please wait...")
 
-            # Get historical trades for XBT/USDT
+            # Get historical trades for JKC/USDT
             trades_usdt = await get_nonkyc_trades()
 
             if not trades_usdt:
@@ -4047,17 +3797,17 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                 await query.edit_message_text("❌ Error processing trade data for chart generation.")
                 return
 
-            # Create XBT/USDT chart
+            # Create JKC/USDT chart
             fig_usdt = go.Figure(data=[go.Scatter(
                 x=df_usdt['timestamp'],
                 y=df_usdt['price'],
                 mode='lines',
-                name='XBT/USDT',
+                name='JKC/USDT',
                 line=dict(color='#00D4AA', width=2)  # NonKYC green color
             )])
 
             fig_usdt.update_layout(
-                title='📈 XBT/USDT Price Chart (NonKYC Exchange)',
+                title='📈 JKC/USDT Price Chart (NonKYC Exchange)',
                 xaxis_title='Time',
                 yaxis_title='Price (USDT)',
                 template='plotly_dark',
@@ -4068,14 +3818,14 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                 title_font=dict(size=16)
             )
 
-            # Save XBT/USDT chart
+            # Save JKC/USDT chart
             chart_usdt_path = 'temp_chart_usdt_button.png'
             fig_usdt.write_image(chart_usdt_path)
 
-            # Send XBT/USDT chart with trading link
+            # Send JKC/USDT chart with trading link
             usdt_caption = (
-                "📊 <b>XBT/USDT Price Chart</b>\n"
-                "💱 <a href='https://nonkyc.io/market/XBT_USDT'>Trade XBT/USDT on NonKYC</a>\n"
+                "📊 <b>JKC/USDT Price Chart</b>\n"
+                "💱 <a href='https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3'>Trade JKC/USDT on NonKYC</a>\n"
                 "📈 Real-time trading data from NonKYC Exchange"
             )
 
@@ -4102,12 +3852,12 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                     x=df_btc['timestamp'],
                     y=df_btc['price_btc'],
                     mode='lines',
-                    name='XBT/BTC',
+                    name='JKC/BTC',
                     line=dict(color='#F7931A', width=2)  # Bitcoin orange color
                 )])
 
                 fig_btc.update_layout(
-                    title='₿ XBT/BTC Price Chart (Estimated)',
+                    title='₿ JKC/BTC Price Chart (Estimated)',
                     xaxis_title='Time',
                     yaxis_title='Price (BTC)',
                     template='plotly_dark',
@@ -4118,14 +3868,14 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                     title_font=dict(size=16)
                 )
 
-                # Save XBT/BTC chart
+                # Save JKC/BTC chart
                 chart_btc_path = 'temp_chart_btc_button.png'
                 fig_btc.write_image(chart_btc_path)
 
-                # Send XBT/BTC chart with trading link
+                # Send JKC/BTC chart with trading link
                 btc_caption = (
-                    "₿ <b>XBT/BTC Price Chart</b>\n"
-                    "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>\n"
+                    "₿ <b>JKC/BTC Price Chart</b>\n"
+                    "💱 <a href='https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3'>Trade JKC/BTC on NonKYC</a>\n"
                     "📊 Estimated from USDT pair data"
                 )
 
@@ -4145,8 +3895,8 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                 # Send message about BTC trading link anyway
                 await context.bot.send_message(
                     chat_id=query.message.chat.id,
-                    text="₿ <b>XBT/BTC Trading</b>\n"
-                         "💱 <a href='https://nonkyc.io/market/XBT_BTC'>Trade XBT/BTC on NonKYC</a>",
+                    text="₿ <b>JKC/BTC Trading</b>\n"
+                         "💱 <a href='https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3'>Trade JKC/BTC on NonKYC</a>",
                     parse_mode="HTML"
                 )
 
@@ -4155,9 +3905,8 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
 
             # Send summary message with both trading links
             summary_message = (
-                "📊 <b>XBT Trading Pairs on NonKYC Exchange</b>\n\n"
-                "💱 <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT Trading</a>\n"
-                "₿ <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC Trading</a>\n\n"
+                "📊 <b>JKC Trading on NonKYC Exchange</b>\n\n"
+                "💱 <a href='https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3'>JKC/USDT Trading</a>\n\n"
                 "🌐 <a href='https://nonkyc.io'>Visit NonKYC Exchange</a>"
             )
 
@@ -4199,7 +3948,8 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
             await query.edit_message_text("🚀 Use /start command to start the bot in this chat.")
         else:
             chat_id = query.message.chat.id
-            if chat_id == -1002471264202:
+            public_supergroups = CONFIG.get("public_supergroups", [])
+            if chat_id in public_supergroups:
                 await query.edit_message_text(
                     "❌ <b>Permission Denied</b>\n\n"
                     "The /start command is restricted to the bot owner only.\n"
@@ -4214,7 +3964,8 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
             await query.edit_message_text("🛑 Use /stop command to stop the bot in this chat.")
         else:
             chat_id = query.message.chat.id
-            if chat_id == -1002471264202:
+            public_supergroups = CONFIG.get("public_supergroups", [])
+            if chat_id in public_supergroups:
                 await query.edit_message_text(
                     "❌ <b>Permission Denied</b>\n\n"
                     "The /stop command is restricted to the bot owner only.\n"
@@ -4229,7 +3980,8 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
             await query.edit_message_text("⚙️ Configuration menu access granted. Use /config command for full interface.")
         else:
             chat_id = query.message.chat.id
-            if chat_id == -1002471264202:
+            public_supergroups = CONFIG.get("public_supergroups", [])
+            if chat_id in public_supergroups:
                 await query.edit_message_text(
                     "❌ <b>Permission Denied</b>\n\n"
                     "Configuration commands are restricted to the bot owner only.\n"
@@ -4263,7 +4015,8 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
                 await query.edit_message_text(message, parse_mode="HTML")
         else:
             chat_id = query.message.chat.id
-            if chat_id == -1002471264202:
+            public_supergroups = CONFIG.get("public_supergroups", [])
+            if chat_id in public_supergroups:
                 await query.edit_message_text(
                     "❌ <b>Permission Denied</b>\n\n"
                     "Image management is restricted to the bot owner only.\n"
@@ -4276,11 +4029,11 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
     elif query.data == "cmd_group_info":
         # Show information about the public supergroup
         group_info = (
-            "🏛️ <b>XBT Public Supergroup Information</b>\n\n"
+            "🏛️ <b>JKC Public Supergroup Information</b>\n\n"
             "📊 <b>Available Commands for Everyone:</b>\n"
             "• /help - View this help information\n"
-            "• /price - Check current XBT price and market data\n"
-            "• /chart - Generate XBT price charts\n"
+            "• /price - Check current JKC price and market data\n"
+            "• /chart - Generate JKC price charts\n"
             "• /debug - View your user information\n\n"
 
             "🚨 <b>Alert System:</b>\n"
@@ -4295,9 +4048,8 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
             "• Admin commands - Owner only\n\n"
 
             "💱 <b>Trading Links:</b>\n"
-            "• <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT Trading</a>\n"
-            "• <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC Trading</a>\n"
-            "• <a href='https://www.classicxbt.com'>Bitcoin Classic Website</a>"
+            "• <a href='https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3'>JKC/USDT Trading</a>\n"
+            "• <a href='https://junk-coin.com/'>JunkCoin Website</a>"
         )
 
         await query.edit_message_text(group_info, parse_mode="HTML")
@@ -4309,21 +4061,21 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
     elif query.data == "cmd_donate":
         # Handle donate command directly
         donate_text = (
-            "☕ <b>XBTBuyBot Developer Coffee Tip</b>\n\n"
-            "If you find this XBT Alert Bot helpful, consider supporting the developer!\n\n"
+            "☕ <b>JKCBuyBot Developer Coffee Tip</b>\n\n"
+            "If you find this JKC Alert Bot helpful, consider supporting the developer!\n\n"
             "👨‍💻 <b>Developer:</b> @moonether\n"
-            "₿ <b>Bitcoin Address:</b>\n"
-            "<code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>\n\n"
+            "🪙 <b>JKC Address:</b>\n"
+            "<code>7Vm7sXtC53aXWgMnEKDYdp9rfz2BkX454w</code>\n\n"
             "💡 <i>Tap and hold the address above to copy it</i>\n\n"
             "Your support helps maintain and improve this bot. Thank you! 🙏"
         )
 
-        # Create a button to copy the Bitcoin address
+        # Create a button to copy the JKC address
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "📋 Copy Bitcoin Address",
-                    callback_data="copy_btc_address"
+                    "📋 Copy JKC Address",
+                    callback_data="copy_jkc_address"
                 )
             ],
             [
@@ -4342,12 +4094,12 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
             parse_mode="HTML"
         )
 
-    elif query.data == "copy_btc_address":
-        # Show the Bitcoin address in a copyable format
+    elif query.data == "copy_jkc_address":
+        # Show the JKC address in a copyable format
         await query.edit_message_text(
-            "☕ <b>XBTBuyBot Developer Coffee Tip</b>\n\n"
-            "₿ <b>Bitcoin Address:</b>\n"
-            "<code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>\n\n"
+            "☕ <b>JKCBuyBot Developer Coffee Tip</b>\n\n"
+            "🪙 <b>JKC Address:</b>\n"
+            "<code>7Vm7sXtC53aXWgMnEKDYdp9rfz2BkX454w</code>\n\n"
             "💡 <i>Tap and hold the address above to copy it</i>\n\n"
             "Thank you for your support! 🙏",
             parse_mode="HTML"
@@ -4356,21 +4108,21 @@ async def button_command_callback(update: Update, context: CallbackContext) -> N
 async def donate_command(update: Update, context: CallbackContext) -> None:
     """Show donation information for the developer."""
     donate_text = (
-        "☕ <b>XBTBuyBot Developer Coffee Tip</b>\n\n"
-        "If you find this XBT Alert Bot helpful, consider supporting the developer!\n\n"
+        "☕ <b>JKCBuyBot Developer Coffee Tip</b>\n\n"
+        "If you find this JKC Alert Bot helpful, consider supporting the developer!\n\n"
         "👨‍💻 <b>Developer:</b> @moonether\n"
-        "₿ <b>Bitcoin Address:</b>\n"
-        "<code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>\n\n"
+        "🪙 <b>JKC Address:</b>\n"
+        "<code>7Vm7sXtC53aXWgMnEKDYdp9rfz2BkX454w</code>\n\n"
         "💡 <i>Tap and hold the address above to copy it</i>\n\n"
         "Your support helps maintain and improve this bot. Thank you! 🙏"
     )
 
-    # Create a button to copy the Bitcoin address
+    # Create a button to copy the JKC address
     keyboard = [
         [
             InlineKeyboardButton(
-                "📋 Copy Bitcoin Address",
-                callback_data="copy_btc_address"
+                "📋 Copy JKC Address",
+                callback_data="copy_jkc_address"
             )
         ],
         [
@@ -4414,7 +4166,8 @@ async def toggle_aggregation(update: Update, context: CallbackContext) -> None:
     else:
         logger.warning(f"User {user_id} tried to use toggle_aggregation command without admin permissions")
         chat_id = update.effective_chat.id
-        if chat_id == -1002471264202:
+        public_supergroups = CONFIG.get("public_supergroups", [])
+        if chat_id in public_supergroups:
             await update.message.reply_text(
                 "❌ <b>Permission Denied</b>\n\n"
                 "The /toggle_aggregation command is restricted to the bot owner only.\n"
@@ -4512,7 +4265,8 @@ async def list_images_command(update: Update, context: CallbackContext) -> None:
     else:
         logger.warning(f"User {user_id} tried to use list_images command without admin permissions")
         chat_id = update.effective_chat.id
-        if chat_id == -1002471264202:
+        public_supergroups = CONFIG.get("public_supergroups", [])
+        if chat_id in public_supergroups:
             await update.message.reply_text(
                 "❌ <b>Permission Denied</b>\n\n"
                 "Image management is restricted to the bot owner only.\n"
@@ -4933,6 +4687,207 @@ async def debug_command(update: Update, context: CallbackContext) -> None:
 
     await update.message.reply_text(debug_info, parse_mode="HTML")
 
+async def tx_command(update: Update, context: CallbackContext) -> None:
+    """Look up transaction information by hash."""
+    if not context.args:
+        await update.message.reply_text(
+            "❌ <b>Usage:</b> /tx &lt;transaction_hash&gt;\n\n"
+            "<b>Example:</b>\n"
+            "<code>/tx f73365020dfbe878676456c558ba0a8045d72445f5a4306ca9b221c23f3b0055</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    tx_hash = context.args[0].strip()
+
+    # Validate transaction hash format (64 character hex string)
+    if len(tx_hash) != 64 or not all(c in '0123456789abcdefABCDEF' for c in tx_hash):
+        await update.message.reply_text(
+            "❌ <b>Invalid transaction hash format</b>\n\n"
+            "Transaction hash must be a 64-character hexadecimal string.",
+            parse_mode="HTML"
+        )
+        return
+
+    await update.message.reply_text("🔍 Looking up transaction information...")
+
+    try:
+        import requests
+
+        # Query the JKC explorer API
+        api_url = f"https://jkc-explorer.dedoo.xyz/ext/gettx/{tx_hash}"
+        response = requests.get(api_url, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            if "tx" in data and data["tx"]:
+                tx = data["tx"]
+
+                # Format transaction information
+                tx_info = (
+                    f"🔍 <b>Transaction Information</b>\n\n"
+                    f"📋 <b>Hash:</b> <code>{tx['txid']}</code>\n"
+                    f"🧱 <b>Block:</b> {tx.get('blockindex', 'Unknown')}\n"
+                    f"✅ <b>Confirmations:</b> {data.get('confirmations', 'Unknown')}\n"
+                    f"💰 <b>Total Value:</b> {tx.get('total', 'Unknown')} JKC\n"
+                    f"📅 <b>Timestamp:</b> {tx.get('timestamp', 'Unknown')}\n\n"
+                )
+
+                # Add input information
+                if tx.get('vin'):
+                    tx_info += f"📥 <b>Inputs ({len(tx['vin'])}):</b>\n"
+                    for i, vin in enumerate(tx['vin'][:3]):  # Show first 3 inputs
+                        if vin.get('is_coinbase'):
+                            tx_info += f"  • Coinbase (Block Reward)\n"
+                        else:
+                            tx_info += f"  • {vin.get('txid', 'Unknown')[:16]}...\n"
+                    if len(tx['vin']) > 3:
+                        tx_info += f"  • ... and {len(tx['vin']) - 3} more\n"
+                    tx_info += "\n"
+
+                # Add output information
+                if tx.get('vout'):
+                    tx_info += f"📤 <b>Outputs ({len(tx['vout'])}):</b>\n"
+                    for i, vout in enumerate(tx['vout'][:3]):  # Show first 3 outputs
+                        if vout.get('value', 0) > 0:
+                            address = vout.get('scriptpubkey_address', 'Unknown')
+                            value = vout.get('value', 0)
+                            if isinstance(value, (int, float)):
+                                value_jkc = value / 100000000  # Convert satoshis to JKC
+                                tx_info += f"  • {address[:20]}... → {value_jkc:.8f} JKC\n"
+                            else:
+                                tx_info += f"  • {address[:20]}... → {value} JKC\n"
+                    if len(tx['vout']) > 3:
+                        tx_info += f"  • ... and {len(tx['vout']) - 3} more\n"
+
+                # Add explorer link
+                tx_info += f"\n🔗 <a href='https://jkc-explorer.dedoo.xyz/tx/{tx_hash}'>View on Explorer</a>"
+
+                await update.message.reply_text(tx_info, parse_mode="HTML", disable_web_page_preview=True)
+            else:
+                await update.message.reply_text(
+                    f"❌ <b>Transaction not found</b>\n\n"
+                    f"The transaction hash <code>{tx_hash}</code> was not found in the blockchain.\n\n"
+                    f"🔗 <a href='https://jkc-explorer.dedoo.xyz/'>Search on Explorer</a>",
+                    parse_mode="HTML"
+                )
+        else:
+            await update.message.reply_text(
+                f"❌ <b>Error querying blockchain</b>\n\n"
+                f"HTTP {response.status_code}: Unable to fetch transaction data.\n\n"
+                f"🔗 <a href='https://jkc-explorer.dedoo.xyz/tx/{tx_hash}'>Try on Explorer</a>",
+                parse_mode="HTML"
+            )
+
+    except requests.exceptions.Timeout:
+        await update.message.reply_text(
+            "⏰ <b>Request timeout</b>\n\n"
+            "The blockchain explorer is taking too long to respond. Please try again later.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Error in tx_command: {e}")
+        await update.message.reply_text(
+            f"❌ <b>Error occurred</b>\n\n"
+            f"Unable to fetch transaction information: {str(e)}\n\n"
+            f"🔗 <a href='https://jkc-explorer.dedoo.xyz/tx/{tx_hash}'>Try on Explorer</a>",
+            parse_mode="HTML"
+        )
+
+async def address_command(update: Update, context: CallbackContext) -> None:
+    """Look up address balance and information."""
+    if not context.args:
+        await update.message.reply_text(
+            "❌ <b>Usage:</b> /address &lt;wallet_address&gt;\n\n"
+            "<b>Example:</b>\n"
+            "<code>/address 3P3UvT6vdDJVrbB2mn6WrP8gywpu2Knx8C</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    address = context.args[0].strip()
+
+    # Basic address validation (JKC addresses typically start with specific characters)
+    if len(address) < 26 or len(address) > 35:
+        await update.message.reply_text(
+            "❌ <b>Invalid address format</b>\n\n"
+            "Please provide a valid JKC wallet address.",
+            parse_mode="HTML"
+        )
+        return
+
+    await update.message.reply_text("🔍 Looking up address information...")
+
+    try:
+        import requests
+
+        # Query the JKC explorer API for balance
+        balance_url = f"https://jkc-explorer.dedoo.xyz/ext/getbalance/{address}"
+        balance_response = requests.get(balance_url, timeout=10)
+
+        if balance_response.status_code == 200:
+            try:
+                balance = float(balance_response.text.strip())
+
+                # Query for detailed address information
+                address_url = f"https://jkc-explorer.dedoo.xyz/ext/getaddress/{address}"
+                address_response = requests.get(address_url, timeout=10)
+
+                address_info = (
+                    f"💰 <b>Address Information</b>\n\n"
+                    f"📋 <b>Address:</b> <code>{address}</code>\n"
+                    f"💎 <b>Balance:</b> {balance:,.8f} JKC\n"
+                )
+
+                if address_response.status_code == 200:
+                    try:
+                        addr_data = address_response.json()
+                        if isinstance(addr_data, dict):
+                            if 'sent' in addr_data:
+                                address_info += f"📤 <b>Total Sent:</b> {addr_data['sent']:,.8f} JKC\n"
+                            if 'received' in addr_data:
+                                address_info += f"📥 <b>Total Received:</b> {addr_data['received']:,.8f} JKC\n"
+                            if 'txs' in addr_data:
+                                address_info += f"📊 <b>Transaction Count:</b> {addr_data['txs']}\n"
+                    except:
+                        pass  # If detailed info fails, just show balance
+
+                # Add explorer link
+                address_info += f"\n🔗 <a href='https://jkc-explorer.dedoo.xyz/address/{address}'>View on Explorer</a>"
+
+                await update.message.reply_text(address_info, parse_mode="HTML", disable_web_page_preview=True)
+
+            except ValueError:
+                await update.message.reply_text(
+                    f"❌ <b>Invalid response from explorer</b>\n\n"
+                    f"Unable to parse balance information.\n\n"
+                    f"🔗 <a href='https://jkc-explorer.dedoo.xyz/address/{address}'>Try on Explorer</a>",
+                    parse_mode="HTML"
+                )
+        else:
+            await update.message.reply_text(
+                f"❌ <b>Address not found</b>\n\n"
+                f"The address <code>{address}</code> was not found or has no transactions.\n\n"
+                f"🔗 <a href='https://jkc-explorer.dedoo.xyz/'>Search on Explorer</a>",
+                parse_mode="HTML"
+            )
+
+    except requests.exceptions.Timeout:
+        await update.message.reply_text(
+            "⏰ <b>Request timeout</b>\n\n"
+            "The blockchain explorer is taking too long to respond. Please try again later.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Error in address_command: {e}")
+        await update.message.reply_text(
+            f"❌ <b>Error occurred</b>\n\n"
+            f"Unable to fetch address information: {str(e)}\n\n"
+            f"🔗 <a href='https://jkc-explorer.dedoo.xyz/address/{address}'>Try on Explorer</a>",
+            parse_mode="HTML"
+        )
+
 async def test_command(update: Update, context: CallbackContext) -> None:
     """Test command to show current data format and simulate alert."""
     if not await is_admin(update, context):
@@ -4958,7 +4913,7 @@ async def test_command(update: Update, context: CallbackContext) -> None:
             nonkyc_info += f"✅ Trades: {len(nonkyc_trades)} trades fetched\n"
             if len(nonkyc_trades) > 0:
                 latest_trade = nonkyc_trades[0]
-                nonkyc_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} XBT at ${latest_trade.get('price', 'N/A')}\n"
+                nonkyc_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} JKC at ${latest_trade.get('price', 'N/A')}\n"
         else:
             nonkyc_info += "❌ Trades: Failed to fetch\n"
 
@@ -4972,7 +4927,7 @@ async def test_command(update: Update, context: CallbackContext) -> None:
         coinex_info = "🏦 <b>CoinEx Data:</b>\n"
         if coinex_ticker:
             coinex_info += f"✅ Ticker: Price ${coinex_ticker.get('last', 'N/A')}\n"
-            coinex_info += f"✅ Volume: {coinex_ticker.get('volume', 'N/A')} XBT\n"
+            coinex_info += f"✅ Volume: {coinex_ticker.get('volume', 'N/A')} JKC\n"
             coinex_info += f"✅ Value: ${coinex_ticker.get('value', 'N/A')}\n"
         else:
             coinex_info += "❌ Ticker: Failed to fetch\n"
@@ -4981,7 +4936,7 @@ async def test_command(update: Update, context: CallbackContext) -> None:
             coinex_info += f"✅ Trades: {len(coinex_trades)} trades fetched\n"
             if len(coinex_trades) > 0:
                 latest_trade = coinex_trades[0]
-                coinex_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} XBT at ${latest_trade.get('price', 'N/A')}\n"
+                coinex_info += f"   Latest: {latest_trade.get('quantity', 'N/A')} JKC at ${latest_trade.get('price', 'N/A')}\n"
         else:
             coinex_info += "❌ Trades: Failed to fetch\n"
 
@@ -5018,13 +4973,13 @@ async def test_command(update: Update, context: CallbackContext) -> None:
             sum_value=simulated_value,
             exchange="Test Exchange (Simulated)",
             timestamp=simulated_timestamp,
-            exchange_url="https://www.coinex.com/en/exchange/xbt-usdt"
+            exchange_url="https://www.coinex.com/en/exchange/JKC-usdt"
         )
 
         await update.message.reply_text(
             f"✅ <b>Test Complete!</b>\n\n"
             f"Simulated trade:\n"
-            f"💰 Amount: {simulated_quantity:.4f} XBT\n"
+            f"💰 Amount: {simulated_quantity:.4f} JKC\n"
             f"💵 Price: ${simulated_price:.6f}\n"
             f"💲 Value: ${simulated_value:.2f} USDT\n"
             f"🎯 Threshold: ${VALUE_REQUIRE} USDT",
@@ -5050,9 +5005,9 @@ async def exchange_availability_monitor():
             for exchange, available in current_availability.items():
                 if available != previous_availability.get(exchange, False):
                     if available:
-                        logger.info(f"🎉 XBT is now available on {exchange.upper()}!")
+                        logger.info(f"🎉 JKC is now available on {exchange.upper()}!")
                     else:
-                        logger.info(f"❌ XBT is no longer available on {exchange.upper()}")
+                        logger.info(f"❌ JKC is no longer available on {exchange.upper()}")
 
             previous_availability = current_availability.copy()
 
@@ -5071,15 +5026,35 @@ async def heartbeat():
         if counter % 60 == 0:  # Log every minute
             available_exchanges = [ex for ex, available in EXCHANGE_AVAILABILITY.items() if available]
             if available_exchanges:
-                logger.info(f"Bot running - Monitoring XBT on: {', '.join(available_exchanges)} | Threshold: {VALUE_REQUIRE} USDT")
+                logger.info(f"Bot running - Monitoring JKC on: {', '.join(available_exchanges)} | Threshold: {VALUE_REQUIRE} USDT")
             else:
                 logger.info(f"Bot running - Using LiveCoinWatch API | Threshold: {VALUE_REQUIRE} USDT")
         await asyncio.sleep(1)
 
 def main():
     """Start the bot."""
-    # Create the Application and pass it your bot's token.
+    # Create the Application and pass it your bot's token with error handling
     application = Application.builder().token(BOT_TOKEN).build()
+
+    # Add error handler for Telegram API conflicts
+    async def error_handler(update: object, context) -> None:
+        """Handle errors in the bot."""
+        import traceback
+        logger.error(f"Exception while handling an update: {context.error}")
+
+        # Handle specific Telegram API conflicts
+        if "Conflict: terminated by other getUpdates request" in str(context.error):
+            logger.warning("⚠️ Telegram API conflict detected - another bot instance may be running")
+            logger.warning("🔄 Bot will continue attempting to reconnect...")
+            # Don't exit, let the bot retry automatically
+            return
+
+        # Log full traceback for other errors
+        tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+        tb_string = ''.join(tb_list)
+        logger.error(f"Full traceback: {tb_string}")
+
+    application.add_error_handler(error_handler)
 
     # Add debug logging for startup
     logger.info(f"Starting bot with token: {BOT_TOKEN[:5]}...{BOT_TOKEN[-5:]}")
@@ -5095,6 +5070,8 @@ def main():
     application.add_handler(CommandHandler("ipwan", get_ipwan_command))
     application.add_handler(CommandHandler("toggle_aggregation", toggle_aggregation))
     application.add_handler(CommandHandler("debug", debug_command))  # This should now be defined
+    application.add_handler(CommandHandler("tx", tx_command))  # Transaction lookup command
+    application.add_handler(CommandHandler("address", address_command))  # Address lookup command
     application.add_handler(CommandHandler("test", test_command))  # Test command for simulating alerts
     application.add_handler(CommandHandler("list_images", list_images_command))
     application.add_handler(CommandHandler("clear_images", clear_images_command))
@@ -5170,9 +5147,8 @@ def main():
         # Start exchange availability monitor first
         loop.create_task(exchange_availability_monitor())
 
-        # Start WebSocket connections (they will wait for XBT availability)
+        # Start WebSocket connections (they will wait for JKC availability)
         loop.create_task(nonkyc_websocket_usdt())
-        loop.create_task(nonkyc_websocket_btc())
         loop.create_task(coinex_websocket())
         loop.create_task(ascendex_websocket())
         loop.create_task(nonkyc_orderbook_websocket())
@@ -5181,7 +5157,7 @@ def main():
         loop.create_task(heartbeat())
 
         logger.info("Started all background tasks including WebSocket monitoring")
-        logger.info("WebSocket connections will activate when XBT becomes available on exchanges")
+        logger.info("WebSocket connections will activate when JKC becomes available on exchanges")
         logger.info("Primary data source: LiveCoinWatch API")
         logger.info("Real-time monitoring: Conditional WebSocket connections (NonKYC, CoinEx, AscendEX)")
     except Exception as e:
@@ -5202,14 +5178,14 @@ if __name__ == "__main__":
 
         # Set up file logging
         current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_file = os.path.join("logs", f"xbt_telebot_{current_time}.log")
+        log_file = os.path.join("logs", f"jkc_telebot_{current_time}.log")
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         file_handler.setLevel(logging.INFO)
         logger.addHandler(file_handler)
 
         logger.info(f"Logging to file: {log_file}")
-        logger.info("Starting Bitcoin Classic (XBT) Alert Bot...")
+        logger.info("Starting JunkCoin (JKC) Alert Bot...")
 
         # Configuration is already loaded at module level
         logger.info(f"Configuration loaded: {json.dumps({k: v for k, v in CONFIG.items() if k not in ['bot_token', 'coinex_secret_key', 'ascendex_secret_key']})}")

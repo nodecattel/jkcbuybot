@@ -1,5 +1,5 @@
 """
-WebSocket Handlers Module for XBT Trading Bot
+WebSocket Handlers Module for JKC Trading Bot
 
 This module handles all WebSocket connections to various exchanges including
 NonKYC, CoinEx, and AscendEX. It processes real-time trade data and manages
@@ -13,7 +13,7 @@ import time
 import websockets
 from typing import Optional, Dict, Any
 
-from api_clients import check_exchange_availability, get_exchange_availability, get_btc_usdt_rate, convert_btc_to_usdt
+from api_clients import check_exchange_availability, get_exchange_availability
 from config import get_config_value
 
 # Set up module logger
@@ -51,15 +51,15 @@ async def nonkyc_orderbook_websocket():
     global running, CURRENT_ORDERBOOK, ORDERBOOK_SEQUENCE
     uri = "wss://ws.nonkyc.io"
 
-    # Wait for XBT to become available on NonKYC
+    # Wait for JKC to become available on NonKYC
     while running:
         await check_exchange_availability()
         exchange_availability = get_exchange_availability()
         if exchange_availability["nonkyc"]:
-            logger.info("XBT detected on NonKYC - starting orderbook WebSocket for sweep detection")
+            logger.info("JKC detected on NonKYC - starting orderbook WebSocket for sweep detection")
             break
         else:
-            logger.debug("XBT not yet available on NonKYC for orderbook - waiting...")
+            logger.debug("JKC not yet available on NonKYC for orderbook - waiting...")
             await asyncio.sleep(60)  # Check every minute
             continue
 
@@ -73,16 +73,16 @@ async def nonkyc_orderbook_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to NonKYC orderbook WebSocket at {uri}")
 
-            # Subscribe to XBT/USDT orderbook
+            # Subscribe to JKC/USDT orderbook
             subscribe_msg = {
                 "method": "subscribeOrderbook",
                 "params": {
-                    "symbol": "XBT/USDT"
+                    "symbol": "JKC/USDT"
                 },
                 "id": 4
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/USDT orderbook on NonKYC")
+            logger.debug("Subscribed to JKC/USDT orderbook on NonKYC")
 
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -140,19 +140,19 @@ async def nonkyc_orderbook_websocket():
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
 async def nonkyc_websocket_usdt():
-    """Connect to NonKYC WebSocket API and process XBT/USDT trade data."""
+    """Connect to NonKYC WebSocket API and process JKC/USDT trade data."""
     global running
     uri = "wss://ws.nonkyc.io"
 
-    # Wait for XBT to become available on NonKYC
+    # Wait for JKC to become available on NonKYC
     while running:
         await check_exchange_availability()
         exchange_availability = get_exchange_availability()
         if exchange_availability["nonkyc"]:
-            logger.info("XBT detected on NonKYC - starting USDT WebSocket connection")
+            logger.info("JKC detected on NonKYC - starting USDT WebSocket connection")
             break
         else:
-            logger.debug("XBT not yet available on NonKYC - waiting...")
+            logger.debug("JKC not yet available on NonKYC - waiting...")
             await asyncio.sleep(60)  # Check every minute
             continue
 
@@ -166,16 +166,16 @@ async def nonkyc_websocket_usdt():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to NonKYC WebSocket at {uri}")
 
-            # Subscribe to XBT/USDT trades
+            # Subscribe to JKC/USDT trades
             subscribe_msg = {
                 "method": "subscribeTrades",
                 "params": {
-                    "symbol": "XBT/USDT"
+                    "symbol": "JKC/USDT"
                 },
                 "id": 1
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/USDT trades on NonKYC")
+            logger.debug("Subscribed to JKC/USDT trades on NonKYC")
 
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -202,7 +202,7 @@ async def nonkyc_websocket_usdt():
 
                                 await process_trade_message(
                                     price, quantity, sum_value, "NonKYC", timestamp,
-                                    "https://nonkyc.io/market/XBT_USDT", trade_side, "XBT/USDT"
+                                    "https://nonkyc.io/market/JKC_USDT", trade_side, "JKC/USDT"
                                 )
 
                 except asyncio.TimeoutError:
@@ -231,144 +231,22 @@ async def nonkyc_websocket_usdt():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
-async def nonkyc_websocket_btc():
-    """Connect to NonKYC WebSocket API and process XBT/BTC trade data with BTC-to-USDT conversion."""
-    global running
-    uri = "wss://ws.nonkyc.io"
-
-    # Wait for XBT to become available on NonKYC
-    while running:
-        await check_exchange_availability()
-        exchange_availability = get_exchange_availability()
-        if exchange_availability["nonkyc"]:
-            logger.info("XBT detected on NonKYC - starting BTC WebSocket connection")
-            break
-        else:
-            logger.debug("XBT not yet available on NonKYC for BTC pair - waiting...")
-            await asyncio.sleep(60)  # Check every minute
-            continue
-
-    # For exponential backoff
-    retry_delay = 5
-    max_retry_delay = 60
-
-    # Track last transaction timestamp for BTC pair
-    last_trans_btc = int(time.time() * 1000)
-
-    # Cache BTC/USDT rate and refresh periodically
-    btc_rate = None
-    last_rate_update = 0
-    rate_update_interval = 300  # Update BTC rate every 5 minutes
-
-    while running:
-        websocket = None
-        try:
-            websocket = await websockets.connect(uri, ping_interval=30)
-            logger.debug(f"Connected to NonKYC WebSocket for XBT/BTC at {uri}")
-
-            # Subscribe to XBT/BTC trades
-            subscribe_msg = {
-                "method": "subscribeTrades",
-                "params": {
-                    "symbol": "XBT/BTC"
-                },
-                "id": 3
-            }
-            await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/BTC trades on NonKYC")
-
-            # Reset retry delay on successful connection
-            retry_delay = 5
-
-            # Process messages
-            while running:
-                try:
-                    # Update BTC rate periodically
-                    current_time = time.time()
-                    if current_time - last_rate_update > rate_update_interval or btc_rate is None:
-                        btc_rate = await get_btc_usdt_rate()
-                        last_rate_update = current_time
-                        if btc_rate:
-                            logger.debug(f"Updated BTC/USDT rate: ${btc_rate:.2f}")
-                        else:
-                            logger.warning("Failed to update BTC/USDT rate")
-
-                    response = json.loads(await asyncio.wait_for(websocket.recv(), timeout=5))
-
-                    # Log all messages in debug mode
-                    if DEBUG_MODE:
-                        logger.info(f"NonKYC BTC message: {response}")
-
-                    # Process trade messages
-                    if "method" in response and response["method"] == "updateTrades":
-                        trades = response["params"]["data"]
-                        for trade in trades:
-                            timestamp = int(trade["timestamp"])
-                            if timestamp > last_trans_btc:
-                                last_trans_btc = timestamp
-
-                                if process_trade_message:
-                                    btc_price = float(trade["price"])
-                                    quantity = float(trade["quantity"])
-                                    btc_sum_value = btc_price * quantity
-                                    trade_side = trade.get("side", "unknown")
-
-                                    # Convert BTC price to USDT equivalent
-                                    if btc_rate:
-                                        usdt_price, _ = await convert_btc_to_usdt(btc_price, btc_rate)
-                                        usdt_sum_value = usdt_price * quantity
-
-                                        logger.debug(f"XBT/BTC trade: {quantity:.4f} XBT at {btc_price:.8f} BTC (${usdt_price:.6f} USDT equivalent)")
-
-                                        # Pass both BTC and USDT values to process_message
-                                        await process_trade_message(
-                                            btc_price, quantity, btc_sum_value, "NonKYC (BTC)", timestamp,
-                                            "https://nonkyc.io/market/XBT_BTC", trade_side, "XBT/BTC",
-                                            usdt_price, usdt_sum_value, btc_rate
-                                        )
-                                    else:
-                                        logger.warning("Cannot process XBT/BTC trade: BTC/USDT rate unavailable")
-
-                except asyncio.TimeoutError:
-                    # Send ping to keep connection alive
-                    try:
-                        await websocket.ping()
-                    except Exception:
-                        logger.warning("Failed to ping NonKYC BTC WebSocket")
-                        break
-                except Exception as e:
-                    logger.error(f"Error processing NonKYC BTC message: {e}")
-                    break
-
-        except Exception as e:
-            logger.error(f"NonKYC BTC WebSocket error: {e}")
-
-        finally:
-            if websocket:
-                try:
-                    await websocket.close()
-                except Exception:
-                    pass
-
-        if running:
-            logger.info(f"Reconnecting to NonKYC BTC WebSocket in {retry_delay} seconds...")
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, max_retry_delay)
+# BTC pair functionality removed - JKC only trades against USDT
 
 async def coinex_websocket():
     """Connect to CoinEx WebSocket API and process trade data."""
     global running
     uri = "wss://socket.coinex.com/"
 
-    # Wait for XBT to become available on CoinEx
+    # Wait for JKC to become available on CoinEx
     while running:
         await check_exchange_availability()
         exchange_availability = get_exchange_availability()
         if exchange_availability["coinex"]:
-            logger.info("XBT detected on CoinEx - starting WebSocket connection")
+            logger.info("JKC detected on CoinEx - starting WebSocket connection")
             break
         else:
-            logger.debug("XBT not yet available on CoinEx - waiting...")
+            logger.debug("JKC not yet available on CoinEx - waiting...")
             await asyncio.sleep(60)  # Check every minute
             continue
 
@@ -385,14 +263,14 @@ async def coinex_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.debug(f"Connected to CoinEx WebSocket at {uri}")
 
-            # Subscribe to XBT/USDT trades
+            # Subscribe to JKC/USDT trades
             subscribe_msg = {
                 "method": "deals.subscribe",
-                "params": ["XBTUSDT"],
+                "params": ["JKCUSDT"],
                 "id": 2
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.debug("Subscribed to XBT/USDT trades on CoinEx")
+            logger.debug("Subscribed to JKC/USDT trades on CoinEx")
 
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -419,7 +297,7 @@ async def coinex_websocket():
 
                                 await process_trade_message(
                                     price, quantity, sum_value, "CoinEx", timestamp,
-                                    "https://www.coinex.com/exchange/XBT-USDT", trade_side, "XBT/USDT"
+                                    "https://www.coinex.com/exchange/JKC-USDT", trade_side, "JKC/USDT"
                                 )
 
                 except asyncio.TimeoutError:
@@ -455,16 +333,16 @@ async def ascendex_websocket():
 
     logger.info("🔄 Starting AscendEX WebSocket handler...")
 
-    # Wait for XBT to become available on AscendEX
+    # Wait for JKC to become available on AscendEX
     while running:
         try:
             await check_exchange_availability()
             exchange_availability = get_exchange_availability()
             if exchange_availability["ascendex"]:
-                logger.info("XBT detected on AscendEX - starting WebSocket connection")
+                logger.info("JKC detected on AscendEX - starting WebSocket connection")
                 break
             else:
-                logger.debug("XBT not yet available on AscendEX - waiting...")
+                logger.debug("JKC not yet available on AscendEX - waiting...")
                 await asyncio.sleep(60)  # Check every minute
                 continue
         except Exception as e:
@@ -483,13 +361,13 @@ async def ascendex_websocket():
             websocket = await websockets.connect(uri, ping_interval=30)
             logger.info(f"✅ Connected to AscendEX WebSocket at {uri}")
 
-            # Subscribe to XBT/USDT trades
+            # Subscribe to JKC/USDT trades
             subscribe_msg = {
                 "op": "sub",
-                "ch": "trades:XBT/USDT"
+                "ch": "trades:JKC/USDT"
             }
             await websocket.send(json.dumps(subscribe_msg))
-            logger.info("✅ Subscribed to XBT/USDT trades on AscendEX")
+            logger.info("✅ Subscribed to JKC/USDT trades on AscendEX")
 
             # Reset retry delay on successful connection
             retry_delay = 5
@@ -517,7 +395,7 @@ async def ascendex_websocket():
 
                                 await process_trade_message(
                                     price, quantity, sum_value, "AscendEX", timestamp,
-                                    "https://ascendex.com/en/cashtrade-spottrading/usdt/xbt", side_str, "XBT/USDT"
+                                    "https://ascendex.com/en/cashtrade-spottrading/usdt/JKC", side_str, "JKC/USDT"
                                 )
 
                 except asyncio.TimeoutError:
@@ -591,9 +469,9 @@ async def exchange_availability_monitor():
             for exchange, available in current_availability.items():
                 if available != previous_availability.get(exchange, False):
                     if available:
-                        logger.info(f"🎉 XBT is now available on {exchange.upper()}!")
+                        logger.info(f"🎉 JKC is now available on {exchange.upper()}!")
                     else:
-                        logger.info(f"❌ XBT is no longer available on {exchange.upper()}")
+                        logger.info(f"❌ JKC is no longer available on {exchange.upper()}")
 
             previous_availability = current_availability.copy()
 
@@ -626,7 +504,7 @@ async def heartbeat():
                 value_require = get_value_require()
 
                 if available_exchanges:
-                    logger.info(f"💓 Bot running - Monitoring XBT on: {', '.join(available_exchanges)} | Threshold: {value_require} USDT")
+                    logger.info(f"💓 Bot running - Monitoring JKC on: {', '.join(available_exchanges)} | Threshold: {value_require} USDT")
                 else:
                     logger.info(f"💓 Bot running - Using LiveCoinWatch API | Threshold: {value_require} USDT")
 

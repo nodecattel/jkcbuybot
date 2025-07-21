@@ -1,5 +1,5 @@
 """
-Telegram Handlers Module for XBT Trading Bot
+Telegram Handlers Module for JKC Trading Bot
 
 This module contains all Telegram command handlers, callback handlers, and conversation flows.
 It provides the user interface for the bot through various commands and interactive elements.
@@ -56,7 +56,7 @@ async def start_bot(update: Update, context: CallbackContext) -> None:
 
     if await can_use_admin_commands(update, context):
         logger.info(f"User {user_id} has admin permissions, starting bot")
-        await update.message.reply_text("Bot started and monitoring XBT trades!")
+        await update.message.reply_text("Bot started and monitoring JKC trades!")
     else:
         logger.warning(f"User {user_id} tried to start bot without admin permissions")
         await update.message.reply_text("You do not have permission to use this command.")
@@ -82,12 +82,12 @@ async def help_command(update: Update, context: CallbackContext) -> None:
     has_admin = await can_use_admin_commands(update, context)
     
     help_text = """
-🤖 <b>XBT Trading Alert Bot - Help</b>
+🤖 <b>JKC Trading Alert Bot - Help</b>
 
 <b>📊 Public Commands:</b>
 /help - Show this help message
-/price - Get current XBT price and market data
-/chart - Generate XBT price chart
+/price - Get current JKC price and market data
+/chart - Generate JKC price chart
 
 <b>🔧 Admin Commands:</b>"""
 
@@ -110,20 +110,20 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 
     help_text += """
 
-<b>💰 XBTBuyBot Developer Coffee Tip</b>
+<b>💰 JKCBuyBot Developer Coffee Tip</b>
 Support the developer: <code>1B1YLseSykoBPKFzokTGvzM2gzybyEDiU4</code>
 
 <b>🔗 Links:</b>
-• <a href="https://www.classicxbt.com">Bitcoin Classic Website</a>
-• <a href="https://nonkyc.io/market/XBT_USDT">Trade XBT/USDT</a>
-• <a href="https://nonkyc.io/market/XBT_BTC">Trade XBT/BTC</a>
+• <a href="https://www.classicjkc.com">JunkCoin Website</a>
+• <a href="https://nonkyc.io/market/JKC_USDT">Trade JKC/USDT</a>
+• <a href="https://nonkyc.io/market/JKC_BTC">Trade JKC/BTC</a>
 
 <i>Tap Bitcoin address to copy on mobile</i>"""
 
     await update.message.reply_text(help_text, parse_mode="HTML", disable_web_page_preview=True)
 
 async def check_price(update: Update, context: CallbackContext) -> None:
-    """Get current XBT price and market data."""
+    """Get current JKC price and market data."""
     user_id = update.effective_user.id
     logger.info(f"Price command called by user {user_id}")
 
@@ -180,7 +180,7 @@ async def check_price(update: Update, context: CallbackContext) -> None:
 
         # Format the message with rich data including momentum and volume periods
         message = (
-            f"🪙 <b>Bitcoin Classic (XBT) Market Data</b> 🪙\n\n"
+            f"🪙 <b>JunkCoin (JKC) Market Data</b> 🪙\n\n"
             f"💰 <b>Price:</b> ${format_usdt_price(current_price)} USDT\n"
             f"{change_emoji} <b>24h Change:</b> {change_sign}{change_percent:.2f}% "
             f"({change_sign}${format_usdt_price(price_change_usdt)})\n\n"
@@ -194,16 +194,16 @@ async def check_price(update: Update, context: CallbackContext) -> None:
             f"🕐 <b>24h:</b> {format_momentum(momentum_periods['24h'])}\n\n"
 
             f"📈 <b>Volume (24h periods):</b>\n"
-            f"🕐 <b>15m:</b> {volume_periods['15m']:.2f} XBT\n"
-            f"🕐 <b>1h:</b> {volume_periods['1h']:.2f} XBT\n"
-            f"🕐 <b>4h:</b> {volume_periods['4h']:.2f} XBT\n"
-            f"🕐 <b>24h:</b> {volume_periods['24h']:.2f} XBT\n\n"
+            f"🕐 <b>15m:</b> {volume_periods['15m']:.2f} JKC\n"
+            f"🕐 <b>1h:</b> {volume_periods['1h']:.2f} JKC\n"
+            f"🕐 <b>4h:</b> {volume_periods['4h']:.2f} JKC\n"
+            f"🕐 <b>24h:</b> {volume_periods['24h']:.2f} JKC\n\n"
 
             f"📡 <b>Data Source:</b> {data_source}\n\n"
 
-            f"🔗 <b>Trade XBT:</b>\n"
-            f"• <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT on NonKYC</a>\n"
-            f"• <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC on NonKYC</a>"
+            f"🔗 <b>Trade JKC:</b>\n"
+            f"• <a href='https://nonkyc.io/market/JKC_USDT'>JKC/USDT on NonKYC</a>\n"
+            f"• <a href='https://nonkyc.io/market/JKC_BTC'>JKC/BTC on NonKYC</a>"
         )
 
         await update.message.reply_text(message, parse_mode="HTML", disable_web_page_preview=True)
@@ -213,15 +213,15 @@ async def check_price(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text("Error processing market data. Please try again later.")
 
 async def chart_command(update: Update, context: CallbackContext) -> None:
-    """Generate and send XBT price chart."""
+    """Generate and send JKC price chart."""
     user_id = update.effective_user.id
     logger.info(f"Chart command called by user {user_id}")
 
     # Create inline keyboard with chart options
     keyboard = [
         [
-            InlineKeyboardButton("📊 XBT/USDT Chart", url="https://nonkyc.io/market/XBT_USDT"),
-            InlineKeyboardButton("📊 XBT/BTC Chart", url="https://nonkyc.io/market/XBT_BTC")
+            InlineKeyboardButton("📊 JKC/USDT Chart", url="https://nonkyc.io/market/JKC_USDT"),
+            InlineKeyboardButton("📊 JKC/BTC Chart", url="https://nonkyc.io/market/JKC_BTC")
         ],
         [
             InlineKeyboardButton("🔄 Refresh Price", callback_data="cmd_price")
@@ -230,10 +230,10 @@ async def chart_command(update: Update, context: CallbackContext) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     chart_message = (
-        "📊 <b>XBT Price Charts</b>\n\n"
-        "Click the buttons below to view live XBT price charts:\n\n"
-        "📈 <b>XBT/USDT:</b> Trade against USDT\n"
-        "📈 <b>XBT/BTC:</b> Trade against Bitcoin\n\n"
+        "📊 <b>JKC Price Charts</b>\n\n"
+        "Click the buttons below to view live JKC price charts:\n\n"
+        "📈 <b>JKC/USDT:</b> Trade against USDT\n"
+        "📈 <b>JKC/BTC:</b> Trade against Bitcoin\n\n"
         "Charts show real-time price data, volume, and trading history."
     )
 
@@ -679,7 +679,7 @@ async def button_callback(update: Update, context: CallbackContext) -> Optional[
 
             # Format the message with rich data including momentum and volume periods
             message = (
-                f"🪙 <b>Bitcoin Classic (XBT) Market Data</b> 🪙\n\n"
+                f"🪙 <b>JunkCoin (JKC) Market Data</b> 🪙\n\n"
                 f"💰 <b>Price:</b> ${format_usdt_price(current_price)} USDT\n"
                 f"{change_emoji} <b>24h Change:</b> {change_sign}{change_percent:.2f}% "
                 f"({change_sign}${format_usdt_price(price_change_usdt)})\n\n"
@@ -693,16 +693,16 @@ async def button_callback(update: Update, context: CallbackContext) -> Optional[
                 f"🕐 <b>24h:</b> {format_momentum(momentum_periods['24h'])}\n\n"
 
                 f"📈 <b>Volume (24h periods):</b>\n"
-                f"🕐 <b>15m:</b> {volume_periods['15m']:.2f} XBT\n"
-                f"🕐 <b>1h:</b> {volume_periods['1h']:.2f} XBT\n"
-                f"🕐 <b>4h:</b> {volume_periods['4h']:.2f} XBT\n"
-                f"🕐 <b>24h:</b> {volume_periods['24h']:.2f} XBT\n\n"
+                f"🕐 <b>15m:</b> {volume_periods['15m']:.2f} JKC\n"
+                f"🕐 <b>1h:</b> {volume_periods['1h']:.2f} JKC\n"
+                f"🕐 <b>4h:</b> {volume_periods['4h']:.2f} JKC\n"
+                f"🕐 <b>24h:</b> {volume_periods['24h']:.2f} JKC\n\n"
 
                 f"📡 <b>Data Source:</b> {data_source}\n\n"
 
-                f"🔗 <b>Trade XBT:</b>\n"
-                f"• <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT on NonKYC</a>\n"
-                f"• <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC on NonKYC</a>"
+                f"🔗 <b>Trade JKC:</b>\n"
+                f"• <a href='https://nonkyc.io/market/JKC_USDT'>JKC/USDT on NonKYC</a>\n"
+                f"• <a href='https://nonkyc.io/market/JKC_BTC'>JKC/BTC on NonKYC</a>"
             )
 
             await query.edit_message_text(message, parse_mode="HTML", disable_web_page_preview=True)

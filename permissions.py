@@ -1,8 +1,8 @@
 """
-Permissions and Security Module for XBT Trading Bot
+Permissions and Security Module for JKC Trading Bot
 
 This module handles all permission checking, user authentication, and access control
-for the XBT trading bot. It provides a clean interface for verifying user permissions
+for the JKC trading bot. It provides a clean interface for verifying user permissions
 across different command types and chat contexts.
 """
 
@@ -179,8 +179,9 @@ async def can_use_admin_commands(update: Update, context: CallbackContext) -> bo
     elif update.effective_user:
         user_id = update.effective_user.id
 
-    # For the public supergroup (-1002471264202), restrict admin commands to owner only
-    if chat_id == -1002471264202:
+    # For public supergroups, restrict admin commands to owner only
+    public_supergroups = config.get("public_supergroups", [])
+    if chat_id in public_supergroups:
         logger.info(f"Public supergroup access: User {user_id} requesting admin command - checking owner status")
         return await is_owner_only(update, context)
 

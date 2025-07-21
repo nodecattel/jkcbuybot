@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# XBT Trading Alert Bot - Complete Deployment Script
+# JKC Trading Alert Bot - Complete Deployment Script
 # Includes GIF animation fixes, price calculation validation, and enhanced logging
 # Version: 2.0 - Updated with animation support fixes
 
 set -e  # Exit on any error
 
 # Configuration
-CONTAINER_NAME="xbt-telebot-container"
-IMAGE_NAME="xbt-telebot:latest"
+CONTAINER_NAME="jkc-telebot-container"
+IMAGE_NAME="jkc-telebot:latest"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors for output
@@ -44,7 +44,7 @@ log_info() {
 # Header
 echo -e "${PURPLE}"
 echo "================================================================================"
-echo "🎬 XBT TRADING ALERT BOT - COMPLETE DEPLOYMENT SCRIPT"
+echo "🎬 JKC TRADING ALERT BOT - COMPLETE DEPLOYMENT SCRIPT"
 echo "================================================================================"
 echo "🔧 Features: GIF Animation Support, Price Validation, Enhanced Logging"
 echo "📅 Version: 2.0 - Animation Fixes Included"
@@ -103,7 +103,7 @@ else
 fi
 
 # Verify image exists
-if docker images | grep -q "xbt-telebot.*latest"; then
+if docker images | grep -q "jkc-telebot.*latest"; then
     log_success "Docker image verification passed"
 else
     log_error "Docker image verification failed"
@@ -277,7 +277,7 @@ echo "   • Stop container: docker stop $CONTAINER_NAME"
 
 echo ""
 echo -e "${PURPLE}================================================================================"
-echo "🎬 XBT TRADING ALERT BOT DEPLOYMENT COMPLETE - ALL SYSTEMS OPERATIONAL!"
+echo "🎬 JKC TRADING ALERT BOT DEPLOYMENT COMPLETE - ALL SYSTEMS OPERATIONAL!"
 echo "================================================================================${NC}"
 
 exit 0

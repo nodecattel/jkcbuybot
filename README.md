@@ -1,30 +1,58 @@
-# Bitcoin Classic (XBT) Telegram Alert Bot 🤖⛵️
+# JunkCoin (JKC) Telegram Alert Bot 🤖⛵️
 
-A sophisticated Telegram bot that monitors Bitcoin Classic (XBT) transactions across multiple exchanges and sends real-time alerts for significant trades. Features include sweep detection, trade aggregation, dynamic thresholds, and randomized alert images.
+A sophisticated Telegram bot that monitors JunkCoin (JKC) transactions and sends real-time alerts for significant trades. Features include sweep detection, trade aggregation, dynamic thresholds, and animated alert images.
+
+## 🎯 **Bot Information**
+- **Bot Username**: Configure your own bot with @BotFather
+- **Bot Token**: Set in config.json (get from @BotFather)
+- **Admin User**: Configure your Telegram user ID
+- **Trading Pair**: JKC/USDT only
+- **Default Threshold**: 300 USDT
 
 ## 🌟 Features
 
 ### 📊 **Multi-Exchange Monitoring**
 - **NonKYC Exchange** - Real-time orderbook monitoring with sweep detection
 - **CoinEx Exchange** - Live trade monitoring via WebSocket
-- **AscendEX Exchange** - Trade monitoring (requires API keys)
+- **AscendEX Exchange** - Trade monitoring with API support
+- **Komodo DEX** - Decentralized exchange support
 
 ### 🚨 **Smart Alert System**
-- **Dynamic Thresholds** - Automatically adjusts based on trading volume
-- **Trade Aggregation** - Groups related trades to detect coordinated buying
+- **Dynamic Thresholds** - Automatically adjusts based on JKC trading volume
+- **Trade Aggregation** - Groups related trades within 3-second windows
 - **Sweep Detection** - Identifies large orderbook sweeps in real-time
 - **Magnitude Indicators** - Visual representation of trade size with emoji scaling
 
 ### 🎨 **Image Collection System**
-- **Random Image Selection** - Each alert uses a different image from your collection
+- **Random Image Selection** - Each alert uses a different JKC image from your collection
 - **Multiple Formats** - Supports PNG, JPG, JPEG, and GIF files
 - **Easy Management** - Add, list, and clear images via commands
+- **JKC Branding** - Default JKC-branded alert images included
 
 ### ⚙️ **Advanced Configuration**
-- **Admin Controls** - Comprehensive permission system
+- **Admin Controls** - Comprehensive permission system for configured admin user
 - **Real-time Configuration** - Change settings without restarting
 - **Multiple Chat Support** - Deploy across multiple Telegram groups
 - **API Integration** - Optional exchange API keys for enhanced features
+
+## 🔗 **JunkCoin Resources**
+
+### Official Links
+- **Website**: https://junk-coin.com/
+- **Explorer**: https://jkc-explorer.dedoo.xyz/
+- **Wallets**: https://junk-coin.com/wallets/
+- **History**: https://jkchistory.vercel.app/
+- **Supply Tracker**: https://jkcsupply.vercel.app/
+
+### Market Data
+- **CoinGecko**: https://www.coingecko.com/en/coins/junkcoin
+- **CoinMarketCap**: https://coinmarketcap.com/currencies/junkcoin/
+
+### Trading Exchanges
+- **NonKYC**: https://nonkyc.io/market/JKC_USDT
+- **CoinEx**: https://www.coinex.com/en/exchange/jkc-usdt
+- **AscendEX**: https://ascendex.com/en/cashtrade-spottrading/usdt/jkc
+- **Komodo DEX**: https://app.komodoplatform.com/wallet
 
 ## 🚀 Installation
 
@@ -35,8 +63,8 @@ A sophisticated Telegram bot that monitors Bitcoin Classic (XBT) transactions ac
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/nodecattel/xbttelebot.git
-cd xbttelebot
+git clone https://github.com/nodecattel/jkcbuybot.git
+cd jkcbuybot
 ```
 
 ### 2. Configure the Bot
@@ -44,23 +72,23 @@ Edit the `config.json` file with your settings:
 
 ```json
 {
-  "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
-  "value_require": 100,
+  "bot_token": "YOUR_BOT_TOKEN_HERE",
+  "value_require": 300,
   "active_chat_ids": [],
   "bot_owner": YOUR_TELEGRAM_USER_ID,
-  "by_pass": BYPASS_USER_ID,
-  "image_path": "xbt_resized.jpeg",
+  "by_pass": 0,
+  "image_path": "jkc_buy_alert.gif",
   "dynamic_threshold": {
     "enabled": true,
-    "base_value": 100,
+    "base_value": 300,
     "volume_multiplier": 0.05,
     "price_check_interval": 3600,
-    "min_threshold": 50,
-    "max_threshold": 500
+    "min_threshold": 100,
+    "max_threshold": 1000
   },
   "trade_aggregation": {
     "enabled": true,
-    "window": 5
+    "window_seconds": 3
   },
   "coinex_access_id": "",
   "coinex_secret_key": "",
@@ -78,20 +106,21 @@ Edit the `config.json` file with your settings:
 
 ### 3. Build and Deploy
 ```bash
-# Build the Docker image
-docker build -t telebot .
+# Use the automated deployment script
+chmod +x deploy_jkc_bot.sh
+./deploy_jkc_bot.sh
 
-# Start the bot
-docker-compose up -d
+# Or manually with Docker Compose
+docker-compose -f docker-compose.jkc.yml up -d
 
 # Check logs
-docker logs telebot
+docker logs jkc-telebot-container
 ```
 
 ### 4. Get Your Telegram User ID
 1. Message [@userinfobot](https://t.me/userinfobot) on Telegram
 2. Copy your user ID and update `bot_owner` in `config.json`
-3. Rebuild and restart: `docker build -t telebot . && docker-compose restart`
+3. Rebuild and restart: `./deploy_jkc_bot.sh`
 
 ## 🎮 Bot Operation
 
@@ -103,7 +132,7 @@ docker logs telebot
 ### Basic Commands
 
 #### 📊 **Information Commands**
-- `/price` - Check current XBT price and market cap
+- `/price` - Check current JKC price and market cap
 - `/chart` - Generate and send a price chart
 - `/help` - Show all available commands
 - `/debug` - Show user ID, chat info, and admin status
@@ -116,7 +145,7 @@ docker logs telebot
 
 #### ⚙️ **Configuration**
 - `/config` - Access interactive configuration menu
-- `/setmin <value>` - Set minimum transaction value (e.g., `/setmin 150`)
+- `/setmin <value>` - Set minimum transaction value (e.g., `/setmin 300`)
 - `/toggle_aggregation` - Enable/disable trade aggregation
 
 #### 🎨 **Image Management**
@@ -134,7 +163,7 @@ docker logs telebot
 1. **Add the bot** to your Telegram group or use in private chat
 2. **Make yourself admin** of the group (if using in a group)
 3. **Start monitoring**: `/start`
-4. **Configure threshold**: `/setmin 100` (sets minimum to 100 USDT)
+4. **Configure threshold**: `/setmin 300` (sets minimum to 300 USDT)
 5. **Add alert images**: `/setimage` (send multiple images for variety)
 
 ### Understanding Alerts
@@ -163,7 +192,7 @@ The bot can automatically adjust alert thresholds based on trading volume:
 
 #### Trade Aggregation
 Groups related trades to detect coordinated buying:
-- **Time window** - Groups trades within 5-second windows
+- **Time window** - Groups trades within 3-second windows
 - **Sweep detection** - Identifies large coordinated purchases
 - **Reduces spam** - Combines small trades into meaningful alerts
 
@@ -174,19 +203,21 @@ Groups related trades to detect coordinated buying:
 # Pull latest changes
 git pull origin main
 
-# Rebuild and restart
-docker build -t telebot .
-docker-compose down
-docker-compose up -d
+# Use the deployment script
+./deploy_jkc_bot.sh
+
+# Or manually rebuild and restart
+docker-compose -f docker-compose.jkc.yml down
+docker-compose -f docker-compose.jkc.yml up -d
 ```
 
 ### Viewing Logs
 ```bash
 # Real-time logs
-docker logs -f telebot
+docker logs -f jkc-telebot-container
 
 # Last 50 lines
-docker logs telebot --tail 50
+docker logs jkc-telebot-container --tail 50
 ```
 
 ### Backup Configuration
@@ -202,15 +233,15 @@ tar -czf images_backup.tar.gz images/
 
 #### Bot Not Responding
 1. Check if container is running: `docker ps`
-2. Check logs: `docker logs telebot`
+2. Check logs: `docker logs jkc-telebot-container`
 3. Verify bot token in `config.json`
-4. Restart: `docker-compose restart`
+4. Restart: `docker-compose -f docker-compose.jkc.yml restart`
 
 #### Admin Commands Not Working
 1. Verify your user ID: `/debug`
 2. Check `bot_owner` in `config.json`
 3. Ensure you're admin in group chats
-4. Rebuild after config changes: `docker build -t telebot .`
+4. Rebuild after config changes: `./deploy_jkc_bot.sh`
 
 #### No Alerts Received
 1. Check if bot is started: `/start`
@@ -225,7 +256,7 @@ tar -czf images_backup.tar.gz images/
 4. Use `/list_images` to check collection
 
 ### Getting Help
-- Check logs: `docker logs telebot`
+- Check logs: `docker logs jkc-telebot-container`
 - Verify configuration: `/debug` command
 - Test with lower threshold temporarily
 - Ensure proper permissions and admin status
@@ -233,7 +264,7 @@ tar -czf images_backup.tar.gz images/
 ## 📈 Performance Tips
 
 ### Optimal Settings
-- **Threshold**: Start with 100-200 USDT, adjust based on activity
+- **Threshold**: Start with 300-500 USDT, adjust based on activity
 - **Aggregation**: Keep enabled for better sweep detection
 - **Dynamic threshold**: Enable for automatic scaling
 - **Image collection**: 5-10 varied images for best experience

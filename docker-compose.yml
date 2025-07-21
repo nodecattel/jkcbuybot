@@ -1,27 +1,77 @@
 services:
-  telebot:
-    image: telebot
-    container_name: telebot
+  jkc-telebot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jkc-telebot:latest
+    container_name: jkc-telebot-container
+    restart: unless-stopped
+
+    # Environment variables
     environment:
+      - TZ=UTC
       - PYTHONUNBUFFERED=1
+
+    # Volume mounts for persistence and configuration
     volumes:
-      - ./config.json:/mnt/vagrant/app/config.json
-      - ./images:/mnt/vagrant/app/images
-      - ./chart_15min.jpeg:/mnt/vagrant/app/chart_15min.jpeg
-    restart: always
+      # Configuration (read-write to allow /setmin and other config changes)
+      - ./config.json:/app/config.json:rw
+
+      # Logs directory (read-write for log files)
+      - ./logs:/app/logs:rw
+
+      # Images directory (read-write for user uploads)
+      - ./images:/app/images:rw
+
+      # Backup directory (optional, for config backups)
+      - ./backups:/app/backups:rw
+
+    # Network configuration
+    networks:
+      - jkc-bot-network
+
+    # Resource limits (adjust based on server capacity)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import requests; requests.get('https://api.telegram.org/bot' + open('config.json').read().split('\"bot_token\": \"')[1].split('\"')[0] + '/getMe', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    # Logging configuration
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('https://api.telegram.org/bot$$(cat /mnt/vagrant/app/config.json | grep bot_token | cut -d '\"' -f 4)/getMe')"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: '8'
-          memory: 16G
+
+    # Labels for identification
+    labels:
+      - "com.jkcbot.service=telegram-bot"
+      - "com.jkcbot.version=1.0"
+      - "com.jkcbot.description=JunkCoin Alert Bot"
+
+# Isolated network for JKC bot (no conflicts with other bots)
+networks:
+  jkc-bot-network:
+    driver: bridge
+    name: jkc-bot-network
+
+# Optional: Named volumes for better management
+volumes:
+  jkc-logs:
+    driver: local
+  jkc-images:
+    driver: local
+  jkc-backups:
+    driver: local

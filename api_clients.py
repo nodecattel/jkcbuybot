@@ -1,5 +1,5 @@
 """
-API Clients Module for XBT Trading Bot
+API Clients Module for JKC Trading Bot
 
 This module handles all external API integrations including LiveCoinWatch,
 NonKYC Exchange, and other market data providers. It provides a clean interface
@@ -31,8 +31,8 @@ AVAILABILITY_CHECK_INTERVAL = 300  # 5 minutes
 
 async def get_livecoinwatch_data() -> Optional[Dict[str, Any]]:
     """
-    Get Bitcoin Classic data from LiveCoinWatch API with comprehensive error handling.
-    
+    Get JunkCoin data from LiveCoinWatch API with comprehensive error handling.
+
     Returns:
         Optional[Dict]: Market data from LiveCoinWatch or None if failed
     """
@@ -42,9 +42,9 @@ async def get_livecoinwatch_data() -> Optional[Dict[str, Any]]:
             "content-type": "application/json",
             "x-api-key": LIVECOINWATCH_API_KEY
         }
-        payload = {"currency": "USD", "code": "_XBT", "meta": True}
+        payload = {"currency": "USD", "code": "JKC", "meta": True}
 
-        logger.debug("Making request to LiveCoinWatch API for XBT data")
+        logger.debug("Making request to LiveCoinWatch API for JKC data")
         response = requests.post(url, json=payload, headers=headers, timeout=10)
 
         # Log API usage for rate limiting awareness
@@ -83,12 +83,12 @@ async def get_livecoinwatch_data() -> Optional[Dict[str, Any]]:
         logger.error(f"Unexpected error getting LiveCoinWatch data: {e}")
         return None
 
-async def get_nonkyc_ticker(pair: str = "XBT_USDT") -> Optional[Dict[str, Any]]:
+async def get_nonkyc_ticker(pair: str = "JKC_USDT") -> Optional[Dict[str, Any]]:
     """
     Get ticker data from NonKYC Exchange API for specified trading pair.
 
     Args:
-        pair: Trading pair (e.g., "XBT_USDT", "BTC_USDT")
+        pair: Trading pair (e.g., "JKC_USDT")
 
     Returns:
         Optional[Dict]: Ticker data from NonKYC or None if failed
@@ -120,55 +120,7 @@ async def get_nonkyc_ticker(pair: str = "XBT_USDT") -> Optional[Dict[str, Any]]:
         logger.error(f"Unexpected error getting NonKYC {pair} data: {e}")
         return None
 
-async def get_btc_usdt_rate() -> Optional[float]:
-    """
-    Get current BTC/USDT rate from NonKYC Exchange for XBT/BTC price conversion.
-
-    Returns:
-        Optional[float]: BTC/USDT rate or None if failed
-    """
-    try:
-        btc_ticker = await get_nonkyc_ticker("BTC_USDT")
-
-        if btc_ticker and "lastPriceNumber" in btc_ticker:
-            btc_rate = float(btc_ticker["lastPriceNumber"])
-            logger.debug(f"Retrieved BTC/USDT rate: ${btc_rate:.2f}")
-            return btc_rate
-        else:
-            logger.warning("Failed to get BTC/USDT rate from NonKYC")
-            return None
-
-    except Exception as e:
-        logger.error(f"Error getting BTC/USDT rate: {e}")
-        return None
-
-async def convert_btc_to_usdt(btc_price: float, btc_rate: Optional[float] = None) -> Tuple[float, float]:
-    """
-    Convert XBT/BTC price to USDT equivalent.
-
-    Args:
-        btc_price: Price in BTC
-        btc_rate: BTC/USDT rate (fetched if not provided)
-
-    Returns:
-        Tuple[float, float]: (usdt_equivalent_price, btc_usdt_rate_used)
-    """
-    try:
-        if btc_rate is None:
-            btc_rate = await get_btc_usdt_rate()
-
-        if btc_rate is None:
-            logger.error("Cannot convert BTC to USDT: BTC rate unavailable")
-            return 0.0, 0.0
-
-        usdt_equivalent = btc_price * btc_rate
-        logger.debug(f"Converted {btc_price:.8f} BTC to ${usdt_equivalent:.6f} USDT (rate: ${btc_rate:.2f})")
-
-        return usdt_equivalent, btc_rate
-
-    except Exception as e:
-        logger.error(f"Error converting BTC to USDT: {e}")
-        return 0.0, 0.0
+# BTC conversion functions removed - JKC only trades against USDT
 
 async def get_nonkyc_trades() -> Optional[Dict[str, Any]]:
     """
@@ -178,9 +130,9 @@ async def get_nonkyc_trades() -> Optional[Dict[str, Any]]:
         Optional[Dict]: Recent trades data from NonKYC or None if failed
     """
     try:
-        url = "https://api.nonkyc.io/api/v2/market/trades/XBT_USDT"
+        url = "https://api.nonkyc.io/api/v2/market/trades/JKC_USDT"
         
-        logger.debug("Making request to NonKYC API for XBT/USDT trades")
+        logger.debug("Making request to NonKYC API for JKC/USDT trades")
         response = requests.get(url, timeout=10)
         
         if response.status_code == 200:
@@ -203,9 +155,9 @@ async def get_coinex_trades() -> Optional[Dict[str, Any]]:
         Optional[Dict]: Recent trades data from CoinEx or None if failed
     """
     try:
-        url = "https://api.coinex.com/v1/market/deals?market=XBTUSDT&limit=100"
-        
-        logger.debug("Making request to CoinEx API for XBT/USDT trades")
+        url = "https://api.coinex.com/v1/market/deals?market=JKCUSDT&limit=100"
+
+        logger.debug("Making request to CoinEx API for JKC/USDT trades")
         response = requests.get(url, timeout=10)
         
         if response.status_code == 200:
@@ -226,8 +178,8 @@ async def get_coinex_trades() -> Optional[Dict[str, Any]]:
 
 async def check_exchange_availability() -> Dict[str, bool]:
     """
-    Check if XBT is available on various exchanges and update availability flags.
-    
+    Check if JKC is available on various exchanges and update availability flags.
+
     Returns:
         Dict[str, bool]: Exchange availability status
     """
@@ -237,7 +189,7 @@ async def check_exchange_availability() -> Dict[str, bool]:
     if current_time - LAST_AVAILABILITY_CHECK < AVAILABILITY_CHECK_INTERVAL:
         return EXCHANGE_AVAILABILITY
 
-    logger.debug("Checking exchange availability for XBT")
+    logger.debug("Checking exchange availability for JKC")
 
     # Check NonKYC availability
     try:
@@ -249,7 +201,7 @@ async def check_exchange_availability() -> Dict[str, bool]:
 
     # Check CoinEx availability
     try:
-        coinex_url = "https://api.coinex.com/v1/market/ticker?market=XBTUSDT"
+        coinex_url = "https://api.coinex.com/v1/market/ticker?market=JKCUSDT"
         response = requests.get(coinex_url, timeout=5)
         EXCHANGE_AVAILABILITY["coinex"] = response.status_code == 200
     except Exception as e:
@@ -258,7 +210,7 @@ async def check_exchange_availability() -> Dict[str, bool]:
 
     # Check AscendEX availability
     try:
-        ascendex_url = "https://ascendex.com/api/pro/v1/ticker?symbol=XBT/USDT"
+        ascendex_url = "https://ascendex.com/api/pro/v1/ticker?symbol=JKC/USDT"
         response = requests.get(ascendex_url, timeout=5)
         EXCHANGE_AVAILABILITY["ascendex"] = response.status_code == 200
     except Exception as e:

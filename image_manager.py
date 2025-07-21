@@ -1,5 +1,5 @@
 """
-Image Management Module for XBT Trading Bot
+Image Management Module for JKC Trading Bot
 
 This module handles all image-related functionality including image collection management,
 random image selection, file type detection, and image processing for alert messages.
@@ -90,9 +90,9 @@ def get_random_image() -> Optional[str]:
         # Try multiple possible default image paths
         default_paths = [
             get_image_path(),  # From config
-            "xbtbuy.GIF",  # Actual file name
-            "xbt_buy_alert.gif",  # Config file name
-            os.path.join(os.getcwd(), "xbtbuy.GIF"),  # Full path
+            "jkcbuy.GIF",  # Actual file name
+            "jkc_buy_alert.gif",  # Config file name
+            os.path.join(os.getcwd(), "jkcbuy.GIF"),  # Full path
         ]
 
         for path in default_paths:

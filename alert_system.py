@@ -1,5 +1,5 @@
 """
-Alert System Module for XBT Trading Bot
+Alert System Module for JKC Trading Bot
 
 This module handles trade processing, aggregation, threshold checking, and alert delivery.
 It includes the core logic for detecting significant trades and sending notifications
@@ -81,7 +81,7 @@ async def update_threshold():
 
 async def process_message(price: float, quantity: float, sum_value: float, exchange: str,
                          timestamp: int, exchange_url: str, trade_side: str = "buy",
-                         pair_type: str = "XBT/USDT", usdt_price: Optional[float] = None,
+                         pair_type: str = "JKC/USDT", usdt_price: Optional[float] = None,
                          usdt_sum_value: Optional[float] = None, btc_rate: Optional[float] = None):
     """
     Process a trade message and send notification if it meets criteria.
@@ -94,7 +94,7 @@ async def process_message(price: float, quantity: float, sum_value: float, excha
         timestamp: Trade timestamp
         exchange_url: Exchange URL
         trade_side: Trade side (buy/sell)
-        pair_type: Trading pair type ("XBT/USDT" or "XBT/BTC")
+        pair_type: Trading pair type ("JKC/USDT" or "JKC/BTC")
         usdt_price: USDT equivalent price (for BTC pairs)
         usdt_sum_value: USDT equivalent total value (for BTC pairs)
         btc_rate: BTC/USDT rate used for conversion (for BTC pairs)
@@ -102,20 +102,20 @@ async def process_message(price: float, quantity: float, sum_value: float, excha
     global PHOTO, PENDING_TRADES, LAST_AGGREGATION_CHECK
 
     # Determine the currency for logging and threshold checking
-    if pair_type == "XBT/BTC":
+    if pair_type == "JKC/BTC":
         # For BTC pairs, use USDT equivalent for threshold checking
         threshold_price = usdt_price if usdt_price is not None else 0.0
         threshold_sum_value = usdt_sum_value if usdt_sum_value is not None else 0.0
         currency_symbol = "BTC"
         price_display = format_btc_price(price)
-        logger.info(f"Processing {trade_side.upper()} trade: {exchange} {pair_type} - {format_quantity(quantity)} XBT at {price_display} BTC (${format_usdt_price(threshold_price)} USDT equivalent)")
+        logger.info(f"Processing {trade_side.upper()} trade: {exchange} {pair_type} - {format_quantity(quantity)} JKC at {price_display} BTC (${format_usdt_price(threshold_price)} USDT equivalent)")
     else:
         # For USDT pairs, use original values
         threshold_price = price
         threshold_sum_value = sum_value
         currency_symbol = "USDT"
         price_display = format_usdt_price(price)
-        logger.info(f"Processing {trade_side.upper()} trade: {exchange} {pair_type} - {format_quantity(quantity)} XBT at ${price_display} USDT")
+        logger.info(f"Processing {trade_side.upper()} trade: {exchange} {pair_type} - {format_quantity(quantity)} JKC at ${price_display} USDT")
 
     # Additional validation: Only process buy trades for alerts
     if trade_side.lower() not in ["buy", "b", "unknown"]:
@@ -228,17 +228,17 @@ async def process_aggregated_trades():
                     buy_threshold_volume = sum(trade['threshold_sum_value'] for trade in trades if trade.get('trade_side', '').lower() in ['buy', 'b', 'unknown'])
 
                     if validation_passed and buy_threshold_volume >= value_require:
-                        logger.info(f"Sending aggregated alert: {exchange} {pair_type} - {len(trades)} trades, {format_quantity(total_quantity)} XBT, ${buy_threshold_volume:.2f} USDT equivalent")
+                        logger.info(f"Sending aggregated alert: {exchange} {pair_type} - {len(trades)} trades, {format_quantity(total_quantity)} JKC, ${buy_threshold_volume:.2f} USDT equivalent")
 
                         # Verification: Check if weighted average calculation is correct
                         calculated_total = avg_price * total_quantity
-                        tolerance = 0.01 if pair_type == "XBT/USDT" else 0.00000001  # Different tolerance for BTC
+                        tolerance = 0.01 if pair_type == "JKC/USDT" else 0.00000001  # Different tolerance for BTC
                         if abs(calculated_total - total_pending) > tolerance:
-                            pair_currency = "BTC" if pair_type == "XBT/BTC" else "USDT"
-                            logger.error(f"❌ AGGREGATION PRICE CALCULATION MISMATCH for {pair_type}: {format_price(avg_price, pair_currency)} * {format_quantity(total_quantity)} = {calculated_total:.8f if pair_type == 'XBT/BTC' else calculated_total:.2f} != {total_pending:.8f if pair_type == 'XBT/BTC' else total_pending:.2f}")
+                            pair_currency = "BTC" if pair_type == "JKC/BTC" else "USDT"
+                            logger.error(f"❌ AGGREGATION PRICE CALCULATION MISMATCH for {pair_type}: {format_price(avg_price, pair_currency)} * {format_quantity(total_quantity)} = {calculated_total:.8f if pair_type == 'JKC/BTC' else calculated_total:.2f} != {total_pending:.8f if pair_type == 'JKC/BTC' else total_pending:.2f}")
                         else:
-                            pair_currency = "BTC" if pair_type == "XBT/BTC" else "USDT"
-                            logger.debug(f"✅ Aggregation price calculation verified for {pair_type}: {format_price(avg_price, pair_currency)} * {format_quantity(total_quantity)} = {calculated_total:.8f if pair_type == 'XBT/BTC' else calculated_total:.2f} ≈ {total_pending:.8f if pair_type == 'XBT/BTC' else total_pending:.2f}")
+                            pair_currency = "BTC" if pair_type == "JKC/BTC" else "USDT"
+                            logger.debug(f"✅ Aggregation price calculation verified for {pair_type}: {format_price(avg_price, pair_currency)} * {format_quantity(total_quantity)} = {calculated_total:.8f if pair_type == 'JKC/BTC' else calculated_total:.2f} ≈ {total_pending:.8f if pair_type == 'JKC/BTC' else total_pending:.2f}")
 
                         # Send the alert with trade details
                         await send_alert(
@@ -252,7 +252,7 @@ async def process_aggregated_trades():
                             trades,  # Pass trade details for breakdown
                             pair_type,
                             first_trade.get('usdt_price'),
-                            sum(trade.get('usdt_sum_value', 0) for trade in trades) if pair_type == "XBT/BTC" else None,
+                            sum(trade.get('usdt_sum_value', 0) for trade in trades) if pair_type == "JKC/BTC" else None,
                             first_trade.get('btc_rate')
                         )
                     else:
@@ -274,7 +274,7 @@ async def process_aggregated_trades():
 
 async def send_alert(price: float, quantity: float, sum_value: float, exchange: str,
                     timestamp: int, exchange_url: str, num_trades: int = 1,
-                    trade_details: Optional[List[Dict]] = None, pair_type: str = "XBT/USDT",
+                    trade_details: Optional[List[Dict]] = None, pair_type: str = "JKC/USDT",
                     usdt_price: Optional[float] = None, usdt_sum_value: Optional[float] = None,
                     btc_rate: Optional[float] = None):
     """
@@ -289,7 +289,7 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
         exchange_url: Exchange URL
         num_trades: Number of trades in aggregation
         trade_details: List of individual trade details
-        pair_type: Trading pair type ("XBT/USDT" or "XBT/BTC")
+        pair_type: Trading pair type ("JKC/USDT" or "JKC/BTC")
         usdt_price: USDT equivalent price (for BTC pairs)
         usdt_sum_value: USDT equivalent total value (for BTC pairs)
         btc_rate: BTC/USDT rate used for conversion (for BTC pairs)
@@ -297,12 +297,12 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
     global PHOTO
 
     # Determine currency type for validation
-    currency_type = "BTC" if pair_type == "XBT/BTC" else "USDT"
+    currency_type = "BTC" if pair_type == "JKC/BTC" else "USDT"
 
     # Validate the alert calculation before sending
     is_valid, corrected_value = validate_price_calculation(price, quantity, sum_value, f"Alert from {exchange}", currency_type)
     if not is_valid:
-        if pair_type == "XBT/BTC":
+        if pair_type == "JKC/BTC":
             logger.warning(f"Alert calculation corrected: {sum_value:.8f} -> {corrected_value:.8f} BTC")
         else:
             logger.warning(f"Alert calculation corrected: {sum_value:.2f} -> {corrected_value:.2f} USDT")
@@ -315,7 +315,7 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
     # Get comprehensive market data for additional context
     try:
         # Fetch real-time prices for both trading pairs
-        market_data_usdt = await get_nonkyc_ticker()  # XBT/USDT
+        market_data_usdt = await get_nonkyc_ticker()  # JKC/USDT
         volume_data = await calculate_combined_volume_periods()
         volume_periods = volume_data["combined"]
 
@@ -330,15 +330,15 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
         volume_periods = {"15m": 0, "1h": 0, "4h": 0, "24h": 0}
 
     # Build the alert message based on trading pair
-    if pair_type == "XBT/BTC":
-        # XBT/BTC alert with BTC prices and USDT equivalent
+    if pair_type == "JKC/BTC":
+        # JKC/BTC alert with BTC prices and USDT equivalent
         if num_trades > 1 and trade_details:
             # Aggregated BTC trade alert
             message_parts = [
-                f"🚨 <b>XBT/BTC BUY ALERT - {num_trades} Orders Aggregated</b> 🚨\n",
+                f"🚨 <b>JKC/BTC BUY ALERT - {num_trades} Orders Aggregated</b> 🚨\n",
                 f"💰 <b>Total Value:</b> {format_btc_price(sum_value)} BTC",
                 f"💵 <b>USDT Equivalent:</b> ≈ {format_usdt_price(usdt_sum_value)} USDT" if usdt_sum_value else "",
-                f"📊 <b>Total Quantity:</b> {format_quantity(quantity)} XBT",
+                f"📊 <b>Total Quantity:</b> {format_quantity(quantity)} JKC",
                 f"💵 <b>Avg Price:</b> {format_btc_price(price)} BTC",
                 f"💱 <b>USDT Equivalent:</b> ≈ {format_usdt_price(usdt_price)} USDT" if usdt_price else "",
                 f"🏦 <b>Exchange:</b> {exchange}",
@@ -354,9 +354,9 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
                 trade_quantity = trade['quantity']
                 trade_usdt_price = trade.get('usdt_price', 0)
                 if trade_usdt_price:
-                    message_parts.append(f"Order {i}: {format_quantity(trade_quantity)} XBT at {format_btc_price(trade_btc_price)} BTC (≈ {format_usdt_price(trade_usdt_price)} USDT)")
+                    message_parts.append(f"Order {i}: {format_quantity(trade_quantity)} JKC at {format_btc_price(trade_btc_price)} BTC (≈ {format_usdt_price(trade_usdt_price)} USDT)")
                 else:
-                    message_parts.append(f"Order {i}: {format_quantity(trade_quantity)} XBT at {format_btc_price(trade_btc_price)} BTC")
+                    message_parts.append(f"Order {i}: {format_quantity(trade_quantity)} JKC at {format_btc_price(trade_btc_price)} BTC")
 
             if len(trade_details) > 5:
                 message_parts.append(f"... and {len(trade_details) - 5} more orders")
@@ -364,10 +364,10 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
         else:
             # Single BTC trade alert
             message_parts = [
-                f"🚨 <b>XBT/BTC BUY ALERT</b> 🚨\n",
+                f"🚨 <b>JKC/BTC BUY ALERT</b> 🚨\n",
                 f"💰 <b>Value:</b> {format_btc_price(sum_value)} BTC",
                 f"💵 <b>USDT Equivalent:</b> ≈ {format_usdt_price(usdt_sum_value)} USDT" if usdt_sum_value else "",
-                f"📊 <b>Quantity:</b> {format_quantity(quantity)} XBT",
+                f"📊 <b>Quantity:</b> {format_quantity(quantity)} JKC",
                 f"💵 <b>Price:</b> {format_btc_price(price)} BTC",
                 f"💱 <b>USDT Equivalent:</b> ≈ {format_usdt_price(usdt_price)} USDT" if usdt_price else "",
                 f"🏦 <b>Exchange:</b> {exchange}",
@@ -375,13 +375,13 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
                 f"📈 <b>BTC Rate:</b> ${btc_rate:.2f} USDT" if btc_rate else ""
             ]
     else:
-        # XBT/USDT alert with USDT prices
+        # JKC/USDT alert with USDT prices
         if num_trades > 1 and trade_details:
             # Aggregated USDT trade alert
             message_parts = [
-                f"🚨 <b>XBT/USDT BUY ALERT - {num_trades} Orders Aggregated</b> 🚨\n",
+                f"🚨 <b>JKC/USDT BUY ALERT - {num_trades} Orders Aggregated</b> 🚨\n",
                 f"💰 <b>Total Value:</b> ${format_usdt_price(sum_value)} USDT",
-                f"📊 <b>Total Quantity:</b> {format_quantity(quantity)} XBT",
+                f"📊 <b>Total Quantity:</b> {format_quantity(quantity)} JKC",
                 f"💵 <b>Avg Price:</b> ${format_usdt_price(price)} USDT",
                 f"🏦 <b>Exchange:</b> {exchange}",
                 f"⏰ <b>Time:</b> {time_str}\n"
@@ -392,7 +392,7 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
             for i, trade in enumerate(trade_details[:5], 1):
                 trade_price = trade['price']
                 trade_quantity = trade['quantity']
-                message_parts.append(f"Order {i}: {format_quantity(trade_quantity)} XBT at ${format_usdt_price(trade_price)} USDT")
+                message_parts.append(f"Order {i}: {format_quantity(trade_quantity)} JKC at ${format_usdt_price(trade_price)} USDT")
 
             if len(trade_details) > 5:
                 message_parts.append(f"... and {len(trade_details) - 5} more orders")
@@ -400,9 +400,9 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
         else:
             # Single USDT trade alert
             message_parts = [
-                f"🚨 <b>XBT/USDT BUY ALERT</b> 🚨\n",
+                f"🚨 <b>JKC/USDT BUY ALERT</b> 🚨\n",
                 f"💰 <b>Value:</b> ${format_usdt_price(sum_value)} USDT",
-                f"📊 <b>Quantity:</b> {format_quantity(quantity)} XBT",
+                f"📊 <b>Quantity:</b> {format_quantity(quantity)} JKC",
                 f"💵 <b>Price:</b> ${format_usdt_price(price)} USDT",
                 f"🏦 <b>Exchange:</b> {exchange}",
                 f"⏰ <b>Time:</b> {time_str}"
@@ -411,16 +411,16 @@ async def send_alert(price: float, quantity: float, sum_value: float, exchange: 
     # Add market context
     message_parts.extend([
         f"\n📈 <b>Current Market:</b>",
-        f"💲 <b>XBT/USDT:</b> ${format_usdt_price(current_price_usdt)} USDT",
+        f"💲 <b>JKC/USDT:</b> ${format_usdt_price(current_price_usdt)} USDT",
         f"🏛️ <b>Market Cap:</b> ${market_cap:,.0f}" if market_cap > 0 else "",
         f"\n📊 <b>Volume (24h periods):</b>",
-        f"🕐 <b>15m:</b> {volume_periods['15m']:.2f} XBT",
-        f"🕐 <b>1h:</b> {volume_periods['1h']:.2f} XBT",
-        f"🕐 <b>4h:</b> {volume_periods['4h']:.2f} XBT",
-        f"🕐 <b>24h:</b> {volume_periods['24h']:.2f} XBT",
-        f"\n🔗 <b>Trade XBT:</b>",
-        f"• <a href='https://nonkyc.io/market/XBT_USDT'>XBT/USDT on NonKYC</a>",
-        f"• <a href='https://nonkyc.io/market/XBT_BTC'>XBT/BTC on NonKYC</a>"
+        f"🕐 <b>15m:</b> {volume_periods['15m']:.2f} JKC",
+        f"🕐 <b>1h:</b> {volume_periods['1h']:.2f} JKC",
+        f"🕐 <b>4h:</b> {volume_periods['4h']:.2f} JKC",
+        f"🕐 <b>24h:</b> {volume_periods['24h']:.2f} JKC",
+        f"\n🔗 <b>Trade JKC:</b>",
+        f"• <a href='https://nonkyc.io/market/JKC_USDT'>JKC/USDT on NonKYC</a>",
+        f"• <a href='https://nonkyc.io/market/JKC_USDT'>JKC/BTC on NonKYC</a>"
     ])
 
     # Filter out empty strings and join

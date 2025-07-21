@@ -10,15 +10,19 @@
     -1001234567890,
     1234567890
   ],
-  
+
+  "_comment_public_supergroups": "List of public supergroup chat IDs where admin commands are restricted to owner only",
+  "public_supergroups": [
+  ],
+
   "_comment_bot_owner": "Your Telegram user ID (get from @userinfobot or /debug command)",
-  "bot_owner": 1234567890,
+  "bot_owner": YOUR_TELEGRAM_USER_ID,
   
   "_comment_by_pass": "Additional user ID that can use admin commands (optional, set to 0 if not needed)",
   "by_pass": 0,
   
   "_comment_image_path": "Default image file for alerts (will be overridden by random image collection if available)",
-  "image_path": "xbt_buy_alert.gif",
+  "image_path": "jkc_buy_alert.gif",
   
   "_comment_dynamic_threshold": "Automatically adjust alert threshold based on trading volume",
   "dynamic_threshold": {

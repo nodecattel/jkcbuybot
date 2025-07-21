@@ -1,8 +1,8 @@
 """
-Configuration Management Module for XBT Trading Bot
+Configuration Management Module for JKC Trading Bot
 
 This module handles all configuration loading, validation, and persistence
-for the XBT trading bot. It maintains backward compatibility with the existing
+for the JKC trading bot. It maintains backward compatibility with the existing
 config.json structure while providing a clean interface for other modules.
 """
 
@@ -34,7 +34,7 @@ def load_config() -> Dict[str, Any]:
             "active_chat_ids": [],
             "bot_owner": 0,
             "by_pass": 0,
-            "image_path": "xbt_buy_alert.gif",
+            "image_path": "jkc_buy_alert.gif",
             "dynamic_threshold": {
                 "enabled": True,
                 "base_value": 300,
@@ -244,4 +244,4 @@ def get_by_pass() -> int:
 
 def get_image_path() -> str:
     """Get image path from configuration."""
-    return get_config_value('image_path', 'xbt_buy_alert.gif')
+    return get_config_value('image_path', 'jkc_buy_alert.gif')

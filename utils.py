@@ -1,5 +1,5 @@
 """
-Utility Functions Module for XBT Trading Bot
+Utility Functions Module for JKC Trading Bot
 
 This module contains utility functions, formatting helpers, validation logic,
 and other support functions used throughout the bot application.
@@ -43,7 +43,7 @@ def validate_price_calculation(price: float, quantity: float, sum_value: float, 
 
         logger.error(f"❌ PRICE CALCULATION VALIDATION FAILED in {context}:")
         logger.error(f"  💵 Price: {price_formatted} {currency_symbol}")
-        logger.error(f"  📊 Quantity: {format_quantity(quantity)} XBT")
+        logger.error(f"  📊 Quantity: {format_quantity(quantity)} JKC")
         expected_formatted = f"{expected_value:.8f}" if pair_type.upper() == "BTC" else f"{expected_value:.2f}"
         actual_formatted = f"{sum_value:.8f}" if pair_type.upper() == "BTC" else f"{sum_value:.2f}"
         diff_formatted = f"{sum_value - expected_value:.8f}" if pair_type.upper() == "BTC" else f"{sum_value - expected_value:.2f}"
@@ -278,8 +278,8 @@ def validate_buy_sell_aggregation(trades: list, context: str = "Unknown") -> Tup
         return True, 0.0, 0.0
 
     # Determine trading pair from first trade for consistent formatting
-    pair_type = trades[0].get('pair_type', 'XBT/USDT')
-    is_btc_pair = pair_type == "XBT/BTC"
+    pair_type = trades[0].get('pair_type', 'JKC/USDT')
+    is_btc_pair = pair_type == "JKC/BTC"
     currency_symbol = "BTC" if is_btc_pair else "USDT"
 
     # Separate buy and sell trades - use correct field name 'trade_side'

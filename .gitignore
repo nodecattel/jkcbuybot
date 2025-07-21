@@ -165,3 +165,12 @@ dmypy.json
 
 # pytype static type analyzer
 .pytype/
+
+# Development and testing files
+validate_*.py
+test_websocket_*.py
+fix_*.py
+DEPLOYMENT_*.md
+*_DEPLOYMENT_*.md
+
+config.json
