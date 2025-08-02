@@ -1053,7 +1053,11 @@ CURRENT_ORDERBOOK = None
 ORDERBOOK_SEQUENCE = 0
 
 async def nonkyc_orderbook_websocket():
-    """Subscribe to NonKYC orderbook updates for real-time sweep detection."""
+    """Subscribe to NonKYC orderbook updates for real-time sweep detection.
+
+    IMPORTANT: This function processes bid/ask orderbook data (pending orders).
+    It should NOT trigger trade alerts as these are not executed trades.
+    """
     global running, CURRENT_ORDERBOOK, ORDERBOOK_SEQUENCE, EXCHANGE_AVAILABILITY
     uri = "wss://ws.nonkyc.io"
 
@@ -1256,19 +1260,13 @@ async def process_orderbook_update(params):
             return  # Don't process this sweep
 
         if total_swept_value >= min_sweep_threshold and avg_price <= max_price:
-            logger.info(f"Valid orderbook sweep detected: {total_quantity:.4f} JKC at avg {avg_price:.6f} USDT (Total: {total_swept_value:.2f} USDT)")
+            # Log orderbook sweep detection but DO NOT trigger trade alerts
+            # Orderbook sweeps are bid/ask changes, NOT actual executed trades
+            logger.info(f"Orderbook sweep detected (informational only): {total_quantity:.4f} JKC at avg {avg_price:.6f} USDT (Total: {total_swept_value:.2f} USDT)")
+            logger.info("ℹ️  Note: Orderbook sweeps are pending orders, not executed trades. No alert sent.")
 
-            # Process through normal pipeline
-            timestamp = int(time.time() * 1000)
-            await process_message(
-                price=avg_price,
-                quantity=total_quantity,
-                sum_value=total_swept_value,
-                exchange="NonKYC (Orderbook Sweep)",
-                timestamp=timestamp,
-                exchange_url="https://nonkyc.io/market/JKC_USDT?ref=684e356ba01b7b892824a7b3",
-                trade_side="buy"  # Orderbook sweeps removing asks are buy orders
-            )
+            # TODO: In the future, we could implement a separate notification system for large orderbook sweeps
+            # that clearly distinguishes them from actual executed trades
         else:
             if total_swept_value < min_sweep_threshold:
                 logger.debug(f"Small sweep ignored: {total_swept_value:.2f} USDT < {min_sweep_threshold} USDT threshold")
@@ -1399,7 +1397,7 @@ async def nonkyc_websocket_usdt():
                                 if timestamp > LAST_TRANS_JKC and trade_side in ["buy", "b"]:
                                     LAST_TRANS_JKC = timestamp
 
-                                    logger.info(f"✅ Processing BUY trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                    logger.info(f"✅ Processing EXECUTED BUY trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
 
                                     # Process the trade with side information
                                     await process_message(
@@ -1530,7 +1528,7 @@ async def coinex_websocket():
                             if timestamp > LAST_TRANS_COINEX and trade_side in ["buy", "b"]:
                                 LAST_TRANS_COINEX = timestamp
 
-                                logger.info(f"✅ Processing CoinEx BUY trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
+                                logger.info(f"✅ Processing EXECUTED CoinEx BUY trade: {quantity:.4f} JKC at {price:.6f} USDT = {sum_value:.2f} USDT")
 
                                 # Process the trade with side information
                                 await process_message(
@@ -1727,8 +1725,18 @@ async def ascendex_websocket():
 
 async def process_message(price, quantity, sum_value, exchange, timestamp, exchange_url, trade_side="buy",
                          pair_type="JKC/USDT", usdt_price=None, usdt_sum_value=None, btc_rate=None):
-    """Process a trade message and send notification if it meets criteria."""
+    """Process a trade message and send notification if it meets criteria.
+
+    IMPORTANT: This function should ONLY be called for actual executed trades,
+    not for orderbook bid/ask data or pending orders.
+    """
     global PHOTO, PENDING_TRADES, LAST_AGGREGATION_CHECK
+
+    # Validate this is an actual executed trade, not orderbook data
+    if "Orderbook" in exchange or "orderbook" in exchange.lower():
+        logger.error(f"❌ INVALID TRADE SOURCE: {exchange} - Orderbook data should not trigger trade alerts!")
+        logger.error("🚨 This indicates a bug where orderbook bid/ask data is being treated as executed trades")
+        return
 
     # Determine if this is a BTC pair and format logging appropriately
     is_btc_pair = pair_type == "JKC/BTC"
